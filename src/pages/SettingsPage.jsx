@@ -320,6 +320,25 @@ export default function SettingsPage() {
   const [section, setSection] = useState(null)
   const [modelSearch, setModelSearch] = useState({})
   const { uid: deviceUid } = getProfile()
+  const [account, setAccount] = useState(null)
+
+  React.useEffect(() => {
+    if (!supabase) return undefined
+    let active = true
+    supabase.auth.getUser().then(({ data }) => { if (active) setAccount(data.user || null) })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) setAccount(session?.user || null)
+    })
+    return () => { active = false; subscription.unsubscribe() }
+  }, [])
+
+  const profileMeta = account?.user_metadata || {}
+  const profileTitle = profileMeta.telegram_username
+    ? '@' + profileMeta.telegram_username
+    : (profileMeta.full_name || account?.email || 'Локальный профиль')
+  const profileSubtitle = profileMeta.provider === 'telegram'
+    ? 'Вход через Telegram'
+    : account ? 'Аккаунт VerbaIDE' : 'Создаётся автоматически на этом устройстве'
 
   const copyUid = async () => {
     try {
@@ -444,13 +463,15 @@ export default function SettingsPage() {
         <>
           <div className="set-list">
             <div className="profile-card">
-              <Avatar size={52} />
+              {profileMeta.avatar_url
+                ? <img className="profile-account-avatar" src={profileMeta.avatar_url} alt="" referrerPolicy="no-referrer" />
+                : <Avatar size={52} />}
               <span className="grow sp-text">
-                <span className="sp-title">Локальный профиль</span>
-                <span className="sp-sub">Создаётся автоматически на этом устройстве</span>
+                <span className="sp-title">{profileTitle}</span>
+                <span className="sp-sub">{profileSubtitle}</span>
               </span>
-              <button className="profile-uid" onClick={copyUid} title="Скопировать UID">
-                {deviceUid}
+              <button className="profile-uid" onClick={copyUid} title="Скопировать UID устройства">
+                {account ? 'UID' : deviceUid}
               </button>
             </div>
             <button className="set-panel" onClick={switchAccount}>

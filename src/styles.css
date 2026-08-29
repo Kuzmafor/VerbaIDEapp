@@ -355,6 +355,7 @@ input, select, textarea { font-family: inherit; }
   padding: 14px;
   margin-bottom: 10px;
 }
+.profile-account-avatar { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; flex: none; background: var(--panel2); }
 .profile-uid {
   font-family: var(--mono);
   font-size: 12px;
