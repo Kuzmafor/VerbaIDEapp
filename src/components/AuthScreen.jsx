@@ -12,8 +12,20 @@ export default function AuthScreen({ onGuest, onAuthenticated }) {
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
   const [step, setStep] = useState('email')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.hash.slice(1))
+      return params.get('telegram_error') || ''
+    } catch { return '' }
+  })
   const [busy, setBusy] = useState(false)
+  const startTelegram = () => {
+    if (!isSupabaseConfigured()) return setNotice('Supabase ещё не настроен в приложении.')
+    // Client Secret остаётся в Edge Function. В браузер передаётся только
+    // адрес запуска авторизации, поэтому его нельзя извлечь из сайта или APK.
+    const authUrl = `${import.meta.env.VITE_SUPABASE_URL.replace(/\/$/, '')}/functions/v1/telegram-login?action=start`
+    window.location.assign(authUrl)
+  }
   const guest = () => {
     try { localStorage.setItem(AUTH_KEY, 'guest') } catch { /* ignore */ }
     onGuest()
@@ -67,7 +79,7 @@ export default function AuthScreen({ onGuest, onAuthenticated }) {
       {notice && <div className="auth-notice">{notice}</div>}
       {step === 'email' && <><div className="auth-or"><span /> или продолжить через <span /></div>
       <div className="auth-social">
-        <button type="button" onClick={() => setNotice('Вход через Telegram будет доступен после подключения сервера авторизации.')}>
+        <button type="button" onClick={startTelegram} disabled={busy}>
           <svg className="telegram-mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.1 3.5 2.9 10.7c-1.25.5-1.24 1.2-.23 1.5l4.67 1.46 1.8 5.49c.22.61.11.85.76.85.5 0 .72-.23 1-.5l2.27-2.2 4.72 3.49c.87.48 1.5.23 1.72-.8L22.7 5c.33-1.27-.49-1.84-1.6-1.5ZM8.1 13.33l10.54-6.65c.53-.32 1.01-.15.61.2l-9.02 8.14-.35 3.73-1.78-5.42Z" /></svg><b>Telegram</b>
         </button>
         <button type="button" onClick={() => setNotice('Вход через Google будет доступен после подключения сервера авторизации.')}><span className="google-mark">G</span><b>Google</b></button>

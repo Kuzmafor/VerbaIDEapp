@@ -13,6 +13,7 @@ import FileAccessPrompt from './components/FileAccessPrompt'
 import CanvasPanel from './components/CanvasPanel'
 import AuthScreen, { hasChosenAccess } from './components/AuthScreen'
 import { IconMenu, IconEdit } from './components/Icons'
+import { supabase } from './lib/supabase'
 
 function Shell() {
   const store = useStore()
@@ -21,6 +22,25 @@ function Shell() {
   const [splashGone, setSplashGone] = useState(false)
   const [canvasOpen, setCanvasOpen] = useState(false)
   const [accessChosen, setAccessChosen] = useState(hasChosenAccess)
+
+  // После возвращения из Telegram/Supabase сессия приходит в URL. Подхватываем
+  // её и не оставляем пользователя на экране входа.
+  useEffect(() => {
+    if (!supabase) return undefined
+    let alive = true
+    supabase.auth.getSession().then(({ data }) => {
+      if (alive && data.session) {
+        try { localStorage.setItem('verbaide.access-mode', 'supabase') } catch { /* ignore */ }
+        setAccessChosen(true)
+      }
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!alive || !session) return
+      try { localStorage.setItem('verbaide.access-mode', 'supabase') } catch { /* ignore */ }
+      setAccessChosen(true)
+    })
+    return () => { alive = false; subscription.unsubscribe() }
+  }, [])
 
   // после готовности даём сплэшу время на плавное исчезновение
   useEffect(() => {
