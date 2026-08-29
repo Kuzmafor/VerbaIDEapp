@@ -268,3 +268,20 @@ export async function pushToGitHub({ owner, repo, branch, token, changes, messag
 export async function createPullRequest({ owner, repo, token, head, base, title, body }) {
   return gh(`/repos/${owner}/${repo}/pulls`, { token, method: 'POST', body: { title, head, base, body } })
 }
+
+export async function createRepository({ token, name, description = '', isPrivate = true }) {
+  const clean = String(name || '').trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(clean)) throw new Error('некорректное имя репозитория')
+  const data = await gh('/user/repos', { token, method: 'POST', body: { name: clean, description: String(description || '').trim(), private: !!isPrivate, auto_init: false } })
+  return { owner: data.owner?.login || '', repo: data.name, branch: data.default_branch || 'main', url: data.html_url || '' }
+}
+
+export async function listIssues({ token, owner, repo, state = 'open' }) {
+  const data = await gh(`/repos/${owner}/${repo}/issues?state=${encodeURIComponent(state)}&per_page=50`, { token })
+  return (Array.isArray(data) ? data : []).filter((item) => !item.pull_request).map((item) => ({ number: item.number, title: item.title, state: item.state, author: item.user?.login || '', url: item.html_url || '', comments: item.comments || 0 }))
+}
+
+export async function createIssue({ token, owner, repo, title, body = '' }) {
+  if (!String(title || '').trim()) throw new Error('укажите заголовок Issue')
+  return gh(`/repos/${owner}/${repo}/issues`, { token, method: 'POST', body: { title: title.trim(), body: String(body || '').trim() } })
+}

@@ -439,7 +439,7 @@ export default function Composer({
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/*,.pdf,.docx,.xlsx,.xls,.ods,.csv,.tsv,.txt,.md,.json,.js,.jsx,.ts,.tsx,.py,.html,.css"
+        accept="image/*,.apk,.pdf,.docx,.xlsx,.xls,.ods,.csv,.tsv,.txt,.md,.json,.js,.jsx,.ts,.tsx,.py,.html,.css"
         hidden
         onChange={(e) => {
           const fl = [...e.target.files]

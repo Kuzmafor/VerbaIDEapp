@@ -1,0 +1,7 @@
+[functions.telegram-login]
+verify_jwt = false
+
+[functions.admin-users]
+# Функция сама проверяет Bearer-сессию, чтобы возвратить понятную ошибку
+# пользователю, а не стандартный ответ шлюза.
+verify_jwt = false

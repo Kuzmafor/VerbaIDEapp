@@ -48,6 +48,11 @@ export function buildSystemPrompt({ project, attachedFiles, effort, customInstru
     lines.push(
       'У тебя есть инструменты исследования: list_files, read_file, search_project и semantic_search; инструменты правок: patch_file, write_file, move_file и delete_file; а также run_command для разрешённых сборок, тестов и статических проверок. Сначала изучи связанные файлы. Для небольшой правки предпочитай patch_file, для нового файла — write_file. Удаляй и перемещай файлы только когда это действительно требуется задачей. После существенных изменений запусти подходящую проверку. Никогда не заявляй, что команда или запись успешна, если инструмент вернул ошибку, отказ пользователя или недоступность.'
     )
+    if (project.github) {
+      lines.push(
+        'Этот проект связан с GitHub. Доступны repository_status, list_repository_branches и list_repository_commits для чтения; pull_repository, create_repository_branch, push_repository и create_pull_request для управления репозиторием. list_connected_repositories позволяет посмотреть все доступные репозитории, а open_connected_repository — открыть один из них с подтверждением пользователя. Перед любым внешним изменением VerbaIDE всегда покажет пользователю отдельное подтверждение. Перед push сначала проверь repository_status, используй осмысленное сообщение коммита и не создавай Pull Request без просьбы пользователя.'
+      )
+    }
     const filePaths = (project.tree || []).filter((t) => t.kind === 'file').map((t) => t.path)
     if (filePaths.length) {
       lines.push('')
@@ -66,6 +71,8 @@ export function buildSystemPrompt({ project, attachedFiles, effort, customInstru
       lines.push('</file>')
     }
   }
+
+  lines.push('Если пользователь просит работать с репозиторием GitHub, сначала используй list_connected_repositories. Для открытия выбранного репозитория используй open_connected_repository: приложение запросит подтверждение. Если GitHub не подключён, честно сообщи, что его нужно подключить в Настройках → Репозитории.')
 
   if (project || attachedFiles?.length) {
     lines.push('')

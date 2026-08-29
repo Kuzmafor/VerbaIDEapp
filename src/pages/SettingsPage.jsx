@@ -92,7 +92,9 @@ function GitHubSection() {
         </div>
         <p className="set-note">
           Доступны свои и командные репозитории, включая приватные: загрузка в разделе «Файлы»,
-          коммит и push оттуда же. Токен хранится только на этом устройстве.
+          коммит и push оттуда же. Любая модель с поддержкой инструментов может также читать статус,
+          ветки и коммиты, а по вашему подтверждению выполнять pull, создавать ветки, push и Pull Request.
+          Токен хранится только на этом устройстве.
         </p>
         <div className="row">
           <button className="btn" onClick={() => store.disconnectGitHub()}>Отключить аккаунт</button>
@@ -262,7 +264,7 @@ function RepositoriesSection() {
   return <>
     <section className="set-sect">
       <h3>Источники репозиториев</h3>
-      <p className="set-note">Подключите нужный источник. Токены остаются только на устройстве. GitHub уже поддерживает работу с проектом целиком; для остальных источников сейчас проверяется учётная запись и сохраняется подключение.</p>
+      <p className="set-note">Подключите нужный источник. Токены остаются только на устройстве. GitHub поддерживает работу с проектом целиком и доступен агентам всех провайдеров, которые умеют вызывать инструменты; любое действие, меняющее репозиторий, требует вашего подтверждения. Для остальных источников сейчас проверяется учётная запись и сохраняется подключение.</p>
       <div className="repo-source-list">
         {REPOSITORY_SOURCES.map(({ id, title, description, Icon, ready }) => {
           const connected = id === 'github' ? !!settings.github?.login : !!connections[id]?.connectedAt
@@ -442,6 +444,12 @@ export default function SettingsPage() {
       sub: 'Старательность: ' + effortLabel,
     },
     {
+      id: 'language',
+      title: settings.locale === 'en' ? 'Language' : 'Язык интерфейса',
+      Icon: IconChat,
+      sub: settings.locale === 'en' ? 'English' : 'Русский',
+    },
+    {
       id: 'repositories',
       title: 'Репозитории',
       Icon: IconBranch,
@@ -510,7 +518,17 @@ export default function SettingsPage() {
               <h3>Подключённые</h3>
               {settings.providers.length === 0 && (
                 <p className="hero-dim">Пока нет провайдеров. Добавьте свой API-эндпоинт ниже.</p>
-              )}
+            )}
+            {section === 'language' && (
+              <section className="set-sect">
+                <h3>{settings.locale === 'en' ? 'Interface language' : 'Язык интерфейса'}</h3>
+                <p className="set-note">{settings.locale === 'en' ? 'Choose the language used by the VerbaIDE interface.' : 'Выберите язык интерфейса VerbaIDE.'}</p>
+                <div className="theme-choice">
+                  <button className={settings.locale !== 'en' ? 'active' : ''} onClick={() => setSettings((s) => ({ ...s, locale: 'ru' }))}>Русский <small>RU</small></button>
+                  <button className={settings.locale === 'en' ? 'active' : ''} onClick={() => setSettings((s) => ({ ...s, locale: 'en' }))}>English <small>EN</small></button>
+                </div>
+              </section>
+            )}
               {settings.providers.map((p) => (
                 <div key={p.id} className="prov-card">
                   <div className="prov-top">

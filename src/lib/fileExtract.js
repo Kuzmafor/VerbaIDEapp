@@ -75,6 +75,24 @@ async function sheetText(file) {
   }).join('\n\n')
 }
 
+async function apkText(file) {
+  const [{ default: JSZip }, bytes] = await Promise.all([import('jszip'), file.arrayBuffer()])
+  const archive = await JSZip.loadAsync(bytes)
+  const files = Object.values(archive.files).filter((item) => !item.dir).map((item) => item.name).sort()
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  const sha256 = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  const nativeLibs = files.filter((path) => path.startsWith('lib/')).slice(0, 100)
+  const assets = files.filter((path) => path.startsWith('assets/') || path.startsWith('res/')).slice(0, 160)
+  return [
+    '[APK-анализ]', `Имя: ${file.name}`, `Размер: ${file.size} байт`, `SHA-256: ${sha256}`,
+    `Файлов в APK: ${files.length}`, '', '[Основные файлы]',
+    ...files.filter((path) => /^(AndroidManifest\.xml|classes\d*\.dex|resources\.arsc|META-INF\/|assets\/|lib\/)/.test(path)).slice(0, 260),
+    nativeLibs.length ? `\n[Нативные библиотеки]\n${nativeLibs.join('\n')}` : '',
+    assets.length ? `\n[Ресурсы и assets]\n${assets.join('\n')}` : '',
+    '\nAndroidManifest.xml в APK имеет бинарный формат. Для чтения permissions и компонентов понадобится desktop-разбор через apktool/aapt.',
+  ].filter(Boolean).join('\n')
+}
+
 export async function extractExternalFile(file) {
   if (file.size > MAX_EXTERNAL) throw new Error(`${file.name}: файл больше 18 МБ`)
   const path = file.webkitRelativePath || file.name
@@ -91,6 +109,8 @@ export async function extractExternalFile(file) {
     kind = 'document'; content = await docxText(file)
   } else if (extension === 'xlsx') {
     kind = 'table'; content = await sheetText(file)
+  } else if (extension === 'apk' || type === 'application/vnd.android.package-archive') {
+    kind = 'apk'; content = await apkText(file)
   } else if (['xls', 'ods'].includes(extension)) {
     throw new Error(`${file.name}: этот формат таблицы не поддержан, сохраните как XLSX или CSV`)
   } else {

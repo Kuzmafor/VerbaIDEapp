@@ -14,7 +14,7 @@ import { runProjectCommand } from '../lib/commandBridge'
 import { updateNativeAgent } from '../lib/backgroundAgent'
 import {
   IconCheck, IconChevronDown, IconCopy, IconFile, IconRefresh, IconStop, IconBrain, IconClose, IconArrowDown,
-  IconSearch, IconEdit, IconCode, IconFolder, IconGear, IconDownload, ThinkingDots,
+  IconSearch, IconEdit, IconCode, IconFolder, IconGear, IconDownload, IconBranch, ThinkingDots,
 } from '../components/Icons'
 import CodeEditor from '../components/CodeEditor'
 import ConfirmSheet from '../components/ConfirmSheet'
@@ -210,6 +210,8 @@ function FileCard({ path, code, applied, writing, canApply, onApply }) {
 // чтобы в длинной строке было видно, что именно он делает.
 function stepInfo(s) {
   if (!s) return null
+  if (s.name === 'list_connected_repositories') return { kind: 'tree', verb: 'смотрит', target: 'репозитории GitHub' }
+  if (s.name === 'open_connected_repository') return { kind: 'call', verb: 'открывает', target: `${s.args?.owner || '?'}/${s.args?.repo || '?'}` }
   if (s.name === 'read_file') return { kind: 'read', verb: 'читает', target: s.args?.path || 'файл' }
   if (s.name === 'search_project') return { kind: 'search', verb: 'ищет', target: '«' + (s.args?.query || '') + '»' }
   if (s.name === 'semantic_search') return { kind: 'index', verb: 'ищет по индексу', target: '«' + (s.args?.query || '') + '»' }
@@ -219,6 +221,13 @@ function stepInfo(s) {
   if (s.name === 'move_file') return { kind: 'edit', verb: 'перемещает', target: `${s.args?.from || '?'} → ${s.args?.to || '?'}` }
   if (s.name === 'delete_file') return { kind: 'edit', verb: 'удаляет', target: s.args?.path || 'файл' }
   if (s.name === 'run_command') return { kind: 'call', verb: 'проверяет', target: s.args?.command || 'проект' }
+  if (s.name === 'repository_status') return { kind: 'tree', verb: 'проверяет', target: 'состояние репозитория' }
+  if (s.name === 'list_repository_branches') return { kind: 'tree', verb: 'смотрит', target: 'ветки репозитория' }
+  if (s.name === 'list_repository_commits') return { kind: 'tree', verb: 'смотрит', target: 'историю коммитов' }
+  if (s.name === 'pull_repository') return { kind: 'call', verb: 'получает', target: 'изменения из GitHub' }
+  if (s.name === 'create_repository_branch') return { kind: 'call', verb: 'создаёт ветку', target: s.args?.name || '' }
+  if (s.name === 'push_repository') return { kind: 'call', verb: 'отправляет', target: 'изменения в GitHub' }
+  if (s.name === 'create_pull_request') return { kind: 'call', verb: 'создаёт', target: 'Pull Request' }
   return { kind: 'call', verb: 'вызывает', target: s.name }
 }
 
@@ -307,6 +316,7 @@ function ToolGlyph({ name }) {
   if (name === 'list_files') return <IconFolder />
   if (['write_file', 'patch_file', 'move_file', 'delete_file'].includes(name)) return <IconEdit />
   if (name === 'run_command') return <IconCode />
+  if (['list_connected_repositories', 'open_connected_repository', 'repository_status', 'list_repository_branches', 'list_repository_commits', 'pull_repository', 'create_repository_branch', 'push_repository', 'create_pull_request'].includes(name)) return <IconBranch />
   return <IconSearch />
 }
 
@@ -362,11 +372,20 @@ function WorkLog({ message, active, statusInfo }) {
             const parts = path ? fileParts(path) : null
             const label = step.name === 'read_file' ? 'Читал'
               : step.name === 'list_files' ? 'Обзор'
+                : step.name === 'list_connected_repositories' ? 'Репозитории GitHub'
+                  : step.name === 'open_connected_repository' ? 'Открыл GitHub'
                 : step.name === 'write_file' ? 'Записал'
                   : step.name === 'patch_file' ? 'Изменил'
                     : step.name === 'move_file' ? 'Переместил'
                       : step.name === 'delete_file' ? 'Удалил'
                         : step.name === 'run_command' ? 'Проверил'
+                          : step.name === 'repository_status' ? 'Проверил GitHub'
+                            : step.name === 'list_repository_branches' ? 'Ветки GitHub'
+                              : step.name === 'list_repository_commits' ? 'Коммиты GitHub'
+                                : step.name === 'pull_repository' ? 'Получил из GitHub'
+                                  : step.name === 'create_repository_branch' ? 'Создал ветку'
+                                    : step.name === 'push_repository' ? 'Отправил в GitHub'
+                                      : step.name === 'create_pull_request' ? 'Создал Pull Request'
                           : 'Искал'
             const target = parts ? parts.name : (step.name === 'list_files' ? '' : step.args?.query || step.args?.command || (step.name === 'move_file' ? `${step.args?.from} → ${step.args?.to}` : ''))
             return (
@@ -431,6 +450,8 @@ function summarizeToolResult(name, output) {
   const text = String(output || '').trim()
   const lines = text ? text.split(/\r?\n/).filter(Boolean) : []
   if (name === 'list_files') return `${lines.length} ${lines.length === 1 ? 'файл' : 'файлов'}`
+  if (name === 'list_connected_repositories') return `${lines.length} репозиториев`
+  if (name === 'open_connected_repository') return lines[0] || 'репозиторий открыт'
   if (name === 'read_file') return `${lines.length} ${lines.length === 1 ? 'строка' : 'строк'}`
   if (name === 'search_project' || name === 'semantic_search') {
     const files = new Set(lines.map((line) => line.match(/^([^:\n]+(?:\.[\w-]+)):/)?.[1]).filter(Boolean))
@@ -442,6 +463,10 @@ function summarizeToolResult(name, output) {
     const code = text.match(/Код завершения:\s*(-?\d+)/)?.[1]
     return code === '0' ? 'проверка пройдена' : code ? `код ${code}` : 'завершено'
   }
+  if (name === 'repository_status') return 'состояние получено'
+  if (name === 'list_repository_branches') return `${lines.length} веток`
+  if (name === 'list_repository_commits') return `${lines.length} коммитов`
+  if (name === 'pull_repository' || name === 'create_repository_branch' || name === 'push_repository' || name === 'create_pull_request') return lines[0] || 'завершено'
   return 'готово'
 }
 
@@ -585,7 +610,29 @@ export default function ChatPage() {
 
   // Инструменты агента: чтение, точечные правки и безопасные проверки.
   const executeTool = async (name, args, context = {}) => {
-    if (!store.project) return Promise.resolve('Ошибка: проект не открыт')
+    const globalRepositoryTools = ['list_connected_repositories', 'open_connected_repository']
+    if (!store.project && !globalRepositoryTools.includes(name)) return Promise.resolve('Ошибка: проект не открыт')
+    if (name === 'list_connected_repositories') {
+      const repos = await store.fetchMyRepos()
+      return repos?.length
+        ? repos.map((repo) => `${repo.fullName}\t${repo.branch}\t${repo.private ? 'private' : 'public'}\t${repo.description || ''}`).join('\n')
+        : 'Нет доступных репозиториев или GitHub не подключён'
+    }
+    if (name === 'open_connected_repository') {
+      const owner = String(args.owner || '').trim()
+      const repo = String(args.repo || '').trim()
+      if (!owner || !repo) return 'Ошибка: нужны owner и repo'
+      const allowed = await requestToolApproval({
+        kind: 'repository',
+        title: 'Открыть репозиторий GitHub?',
+        message: `${owner}/${repo}`,
+        detail: 'Текущий открытый проект будет заменён загруженной копией репозитория',
+      }, context.signal)
+      if (!allowed) return 'Отказано пользователем: репозиторий не открыт'
+      return (await store.cloneFromGitHub({ owner, repo }, args.branch))
+        ? `Репозиторий открыт: ${owner}/${repo}`
+        : 'Ошибка: репозиторий не удалось открыть'
+    }
     if (name === 'list_files') {
       const files = (store.project.tree || []).filter((t) => t.kind === 'file').map((t) => t.path)
       return Promise.resolve(files.length ? files.slice(0, 800).join('\n') : 'Проект пуст')
@@ -713,6 +760,94 @@ export default function ChatPage() {
       if (!allowed) return 'Отказано пользователем: команда не запускалась'
       try {
         return await runProjectCommand({ command, projectName: store.project.name, signal: context.signal })
+      } catch (error) {
+      return 'Ошибка: ' + (error?.message || String(error))
+    }
+  }
+    if (name === 'repository_status') {
+      try {
+        return JSON.stringify(store.repositoryStatus(), null, 2)
+      } catch (error) {
+        return 'Ошибка: ' + (error?.message || String(error))
+      }
+    }
+    if (name === 'list_repository_branches') {
+      try {
+        const status = store.repositoryStatus()
+        const branches = await store.fetchBranches(...status.repository.split('/'))
+        return branches?.length ? branches.join('\n') : 'Ветки не найдены'
+      } catch (error) {
+        return 'Ошибка: ' + (error?.message || String(error))
+      }
+    }
+    if (name === 'list_repository_commits') {
+      try {
+        const status = store.repositoryStatus()
+        const [owner, repo] = status.repository.split('/')
+        const commits = await store.fetchCommits(owner, repo, status.branch)
+        return commits?.length
+          ? commits.map((item) => `${item.sha.slice(0, 7)} ${item.message} — ${item.author}`).join('\n')
+          : 'Коммиты не найдены'
+      } catch (error) {
+        return 'Ошибка: ' + (error?.message || String(error))
+      }
+    }
+    if (name === 'pull_repository') {
+      const allowed = await requestToolApproval({
+        kind: 'repository',
+        title: 'Применить изменения из GitHub?',
+        message: 'Текущая ветка будет обновлена из удалённого репозитория.',
+        detail: args.force ? 'При конфликтах локальные версии будут заменены версией GitHub' : 'При конфликте изменения не будут применены без отдельного решения',
+      }, context.signal)
+      if (!allowed) return 'Отказано пользователем: изменения из GitHub не применены'
+      const result = await store.pullFromGitHub({ force: !!args.force })
+      if (!result) return 'Ошибка: не удалось получить изменения из GitHub'
+      if (result.conflicts?.length) return `Конфликты: ${result.conflicts.join(', ')}. Изменения не применены.`
+      return 'Изменения из GitHub применены'
+    }
+    if (name === 'create_repository_branch') {
+      const branch = String(args.name || '').trim()
+      if (!branch) return 'Ошибка: не указано имя ветки'
+      const allowed = await requestToolApproval({
+        kind: 'repository',
+        title: 'Создать ветку GitHub?',
+        message: branch,
+        detail: 'Будет создана новая ветка от текущей ветки и проект переключится на неё',
+      }, context.signal)
+      if (!allowed) return 'Отказано пользователем: ветка не создана'
+      return (await store.createGitBranch(branch)) ? `Ветка создана и открыта: ${branch}` : 'Ошибка: не удалось создать ветку'
+    }
+    if (name === 'push_repository') {
+      const status = (() => { try { return store.repositoryStatus() } catch { return null } })()
+      if (!status) return 'Ошибка: откройте проект, связанный с GitHub-репозиторием'
+      if (!status.changes.length) return 'Нет локальных изменений для отправки'
+      const message = String(args.message || '').trim()
+      if (!message) return 'Ошибка: укажите сообщение коммита'
+      const allowed = await requestToolApproval({
+        kind: 'repository',
+        title: 'Отправить изменения в GitHub?',
+        message: `${status.repository} · ${status.branch}`,
+        detail: `${status.changes.length} файлов · commit: ${message}${args.create_pull_request ? ` · затем Pull Request в ${args.base_branch || 'main'}` : ''}`,
+      }, context.signal)
+      if (!allowed) return 'Отказано пользователем: push не выполнен'
+      return (await store.pushToGitHub({ message, createPR: !!args.create_pull_request, baseBranch: args.base_branch }))
+        ? 'Изменения успешно отправлены в GitHub'
+        : 'Ошибка: push не выполнен'
+    }
+    if (name === 'create_pull_request') {
+      const title = String(args.title || '').trim()
+      const baseBranch = String(args.base_branch || '').trim()
+      if (!title || !baseBranch) return 'Ошибка: нужны title и base_branch'
+      const allowed = await requestToolApproval({
+        kind: 'repository',
+        title: 'Создать Pull Request?',
+        message: `${title} → ${baseBranch}`,
+        detail: 'Pull Request будет создан в GitHub из текущей ветки проекта',
+      }, context.signal)
+      if (!allowed) return 'Отказано пользователем: Pull Request не создан'
+      try {
+        const pr = await store.createGitPullRequest({ title, body: args.body, baseBranch })
+        return `Pull Request создан #${pr.number}${pr.url ? `: ${pr.url}` : ''}`
       } catch (error) {
         return 'Ошибка: ' + (error?.message || String(error))
       }

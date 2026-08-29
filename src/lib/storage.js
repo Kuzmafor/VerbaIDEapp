@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS = {
   modelPrices: {}, // `${providerId}:${model}` -> { input, output } за 1M токенов
   maxOutputTokens: 32000, // потолок длины ответа — влияет на длинные файлы
   theme: 'black', // black | graphite | midnight | light
+  locale: 'ru', // ru | en
   fontScale: 100, // 90 | 100 | 110 | 120
   haptics: true,
   reduceMotion: false,

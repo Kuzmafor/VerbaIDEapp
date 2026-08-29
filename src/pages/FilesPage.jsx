@@ -78,6 +78,8 @@ function TreeRows({ nodes, depth, expanded, toggle, onOpen, activePath }) {
 export default function FilesPage() {
   const store = useStore()
   const { project } = store
+  const english = store.settings.locale === 'en'
+  const t = english ? { noProject: 'No project is open', noProjectText: 'Open a project folder or load a repository from GitHub.', openFolder: 'Open folder', fromGitHub: 'From GitHub', create: 'Create project', upload: 'Upload copy', empty: 'Folder is empty', changed: 'modified', save: 'Save', format: 'Format', preview: 'Preview', refresh: 'Refresh', console: 'Console', clear: 'Clear', nothing: 'Nothing yet', run: 'Run project', start: 'Run', build: 'Build', test: 'Test', fix: 'Fix with AI', permission: 'Folder access is required', allow: 'Allow' } : { noProject: 'Нет открытого проекта', noProjectText: 'Откройте папку с проектом или загрузите репозиторий с GitHub.', openFolder: 'Открыть папку', fromGitHub: 'Из GitHub', create: 'Создать проект', upload: 'Загрузить копию', empty: 'Папка пуста', changed: 'изменён', save: 'Сохранить', format: 'Форматировать', preview: 'Предпросмотр', refresh: 'Обновить', console: 'Консоль', clear: 'Очистить', nothing: 'Пока ничего', run: 'Запуск проекта', start: 'Запустить', build: 'Собрать', test: 'Тестировать', fix: 'Исправить через ИИ', permission: 'Нужно разрешение на доступ к папке', allow: 'Разрешить' }
   const [openPath, setOpenPath] = useState(null)
   const [tabs, setTabs] = useState([]) // { path, draft, saved, dirty }
   const [expanded, setExpanded] = useState(new Set())
@@ -753,20 +755,20 @@ export default function FilesPage() {
   if (!project) {
     return (
       <div className="empty">
-        <h2>Нет открытого проекта</h2>
-        <p>Откройте папку с проектом или загрузите репозиторий с GitHub.</p>
+        <h2>{t.noProject}</h2>
+        <p>{t.noProjectText}</p>
         <div className="row center">
           <button className="btn btn-primary" onClick={store.openFolder}>
-            <IconFolder width={16} height={16} /> Открыть папку
+            <IconFolder width={16} height={16} /> {t.openFolder}
           </button>
           <button className="btn" onClick={() => setGhOpen((v) => !v)}>
-            <IconBranch width={16} height={16} /> Из GitHub
+            <IconBranch width={16} height={16} /> {t.fromGitHub}
           </button>
           <button className="btn" onClick={() => setTemplateOpen(true)}>
-            <IconPlus width={16} height={16} /> Создать проект
+            <IconPlus width={16} height={16} /> {t.create}
           </button>
           <label className="btn">
-            <IconUpload width={16} height={16} /> Загрузить копию
+            <IconUpload width={16} height={16} /> {t.upload}
             <input
               type="file"
               hidden
@@ -806,8 +808,8 @@ export default function FilesPage() {
     <div className="files-page">
       {project.needsPermission && (
         <div className="perm-banner">
-          <span>Нужно разрешение на доступ к папке «{project.name}»</span>
-          <button className="btn btn-primary" onClick={store.grantPermission}>Разрешить</button>
+          <span>{t.permission} «{project.name}»</span>
+          <button className="btn btn-primary" onClick={store.grantPermission}>{t.allow}</button>
         </div>
       )}
 
@@ -872,7 +874,7 @@ export default function FilesPage() {
       </div>
 
       <div className="tree">
-        {nested.length === 0 && <div className="side-empty">Папка пуста</div>}
+        {nested.length === 0 && <div className="side-empty">{t.empty}</div>}
         <TreeRows
           nodes={nested}
           depth={0}
@@ -888,9 +890,9 @@ export default function FilesPage() {
           <div className="editor-head">
             <button className="iconbtn" onClick={() => { setJumpTo(null); setOpenPath(null) }} aria-label="Назад к дереву файлов" title="Назад к дереву файлов"><IconBack width={18} height={18} /></button>
             <span className="editor-path">{openPath}</span>
-            {dirty && <span className="badge">изменён</span>}
+            {dirty && <span className="badge">{t.changed}</span>}
             <span className="grow" />
-            <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty}>Сохранить</button>
+            <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty}>{t.save}</button>
           </div>
           <div className="editor-tabs" role="tablist" aria-label="Открытые файлы">
             {tabs.map((tab) => (
@@ -908,7 +910,7 @@ export default function FilesPage() {
             ))}
           </div>
           <div className="editor-commandbar">
-            <button className="mini-btn" onClick={() => setFormatRequest((value) => value + 1)}>Форматировать</button>
+            <button className="mini-btn" onClick={() => setFormatRequest((value) => value + 1)}>{t.format}</button>
             <button className="mini-btn" onClick={goToDefinition} disabled={!editorSelection.word} title="Перейти к определению (F12)">
               К определению
             </button>
@@ -952,9 +954,9 @@ export default function FilesPage() {
         <div className="editor">
           <div className="editor-head">
             <button className="iconbtn" onClick={closePreview} aria-label="Закрыть предпросмотр" title="Закрыть предпросмотр"><IconBack width={18} height={18} /></button>
-            <span className="editor-path">Предпросмотр: {preview.entry}</span>
+            <span className="editor-path">{t.preview}: {preview.entry}</span>
             <span className="grow" />
-            <button className="mini-btn" onClick={runPreview}>Обновить</button>
+            <button className="mini-btn" onClick={runPreview}>{t.refresh}</button>
             <button className="mini-btn" onClick={() => setConsoleOpen((v) => !v)}>
               Консоль{logs.length ? ` (${logs.length})` : ''}
             </button>
@@ -968,12 +970,12 @@ export default function FilesPage() {
           {consoleOpen && (
             <div className="preview-console">
               <div className="pc-head">
-                <span>Консоль</span>
+                <span>{t.console}</span>
                 <span className="grow" />
-                <button className="mini-btn" onClick={() => setLogs([])}>Очистить</button>
+                <button className="mini-btn" onClick={() => setLogs([])}>{t.clear}</button>
               </div>
               <div className="pc-body">
-                {logs.length === 0 && <div className="pc-empty">Пока ничего</div>}
+                {logs.length === 0 && <div className="pc-empty">{t.nothing}</div>}
                 {logs.map((l, i) => (
                   <div key={i} className={'pc-line ' + l.type}>{l.text}</div>
                 ))}

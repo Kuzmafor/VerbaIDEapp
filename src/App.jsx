@@ -8,12 +8,15 @@ import PluginsPage from './pages/PluginsPage'
 import MemoryPage from './pages/MemoryPage'
 import TasksPage from './pages/TasksPage'
 import MediaPage from './pages/MediaPage'
+import AdminPage from './pages/AdminPage'
 import LoadingScreen from './components/LoadingScreen'
 import FileAccessPrompt from './components/FileAccessPrompt'
 import CanvasPanel from './components/CanvasPanel'
 import AuthScreen, { hasChosenAccess } from './components/AuthScreen'
 import { IconMenu, IconEdit } from './components/Icons'
 import { supabase } from './lib/supabase'
+import { App as CapacitorApp } from '@capacitor/app'
+import { Capacitor } from '@capacitor/core'
 
 function Shell() {
   const store = useStore()
@@ -41,6 +44,32 @@ function Shell() {
     })
     return () => { alive = false; subscription.unsubscribe() }
   }, [])
+
+  // Android возвращает результат OAuth через intent `verbaide://auth#...`.
+  // Браузерную сессию нельзя прочитать из WebView, поэтому переносим токены
+  // в локальное хранилище Supabase явно.
+  useEffect(() => {
+    if (!supabase || !Capacitor.isNativePlatform()) return undefined
+    let alive = true
+    const acceptUrl = async (url) => {
+      if (!url?.startsWith('verbaide://auth')) return
+      const hashIndex = url.indexOf('#')
+      const params = new URLSearchParams(hashIndex >= 0 ? url.slice(hashIndex + 1) : '')
+      const error = params.get('telegram_error') || params.get('error_description')
+      if (error) { if (alive) store.toast(error); return }
+      const accessToken = params.get('access_token')
+      const refreshToken = params.get('refresh_token')
+      if (!accessToken || !refreshToken) { if (alive) store.toast('Telegram не передал сессию. Попробуйте ещё раз.'); return }
+      const { error: sessionError } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
+      if (sessionError) { if (alive) store.toast('Не удалось сохранить вход: ' + sessionError.message); return }
+      try { localStorage.setItem('verbaide.access-mode', 'supabase') } catch { /* ignore */ }
+      if (alive) { setAccessChosen(true); store.toast('Вход через Telegram выполнен') }
+    }
+    let listener
+    CapacitorApp.getLaunchUrl().then((launch) => acceptUrl(launch?.url)).catch(() => {})
+    CapacitorApp.addListener('appUrlOpen', ({ url }) => acceptUrl(url)).then((handle) => { listener = handle }).catch(() => {})
+    return () => { alive = false; listener?.remove() }
+  }, [store])
 
   // после готовности даём сплэшу время на плавное исчезновение
   useEffect(() => {
@@ -71,13 +100,19 @@ function Shell() {
     } catch { /* ориентация может быть запрещена браузером */ }
   }, [settings.autoRotate])
 
-  let title = 'Чат'
-  if (page === 'files') title = project ? project.name : 'Файлы'
-  if (page === 'plugins') title = 'Навыки'
-  if (page === 'memory') title = 'Память'
-  if (page === 'tasks') title = 'Задачи'
-  if (page === 'media') title = 'Медиа-студия'
-  if (page === 'settings') title = 'Настройки'
+  useEffect(() => {
+    document.documentElement.lang = settings.locale === 'en' ? 'en' : 'ru'
+  }, [settings.locale])
+
+  const english = settings.locale === 'en'
+  let title = english ? 'Chat' : 'Чат'
+  if (page === 'files') title = project ? project.name : (english ? 'Files' : 'Файлы')
+  if (page === 'plugins') title = english ? 'Skills' : 'Навыки'
+  if (page === 'memory') title = english ? 'Memory' : 'Память'
+  if (page === 'tasks') title = english ? 'Tasks' : 'Задачи'
+  if (page === 'media') title = english ? 'Media studio' : 'Медиа-студия'
+  if (page === 'settings') title = english ? 'Settings' : 'Настройки'
+  if (page === 'admin') title = english ? 'Administration' : 'Администрирование'
   if (page === 'chat') {
     const c = chats.find((x) => x.id === activeChatId)
     title = c?.title || 'Чат'
@@ -127,6 +162,7 @@ function Shell() {
               {page === 'tasks' && <TasksPage />}
               {page === 'media' && <MediaPage />}
               {page === 'settings' && <SettingsPage />}
+              {page === 'admin' && <AdminPage />}
             </main>
             <CanvasPanel open={canvasOpen && page === 'chat'} onClose={() => setCanvasOpen(false)} />
           </div>

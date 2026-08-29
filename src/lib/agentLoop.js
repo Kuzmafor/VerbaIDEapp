@@ -5,6 +5,24 @@ import { streamChat } from './llm'
 
 export const AGENT_TOOLS = [
   {
+    name: 'list_connected_repositories',
+    description: 'Получить список доступных репозиториев подключённого аккаунта GitHub, включая приватные и командные. Не меняет данные.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'open_connected_repository',
+    description: 'Загрузить репозиторий подключённого аккаунта GitHub и открыть его как текущий проект. Перед заменой текущего проекта всегда требуется подтверждение пользователя.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Владелец репозитория GitHub.' },
+        repo: { type: 'string', description: 'Название репозитория GitHub.' },
+        branch: { type: 'string', description: 'Ветка; если не указана, будет выбрана основная.' },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
     name: 'list_files',
     description: 'Получить список всех файлов проекта (относительные пути).',
     input_schema: { type: 'object', properties: {}, required: [] },
@@ -74,6 +92,65 @@ export const AGENT_TOOLS = [
         command: { type: 'string', description: 'Команда проверки, например npm run build, npm test, node --check src/app.js или git status --short.' },
       },
       required: ['command'],
+    },
+  },
+  {
+    name: 'repository_status',
+    description: 'Получить состояние связанного GitHub-репозитория: владелец, имя, текущая ветка и локальные изменения. Не меняет репозиторий.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'list_repository_branches',
+    description: 'Получить список веток связанного GitHub-репозитория. Не меняет репозиторий.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'list_repository_commits',
+    description: 'Получить последние коммиты текущей ветки связанного GitHub-репозитория. Не меняет репозиторий.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'pull_repository',
+    description: 'Получить изменения из текущей ветки GitHub-репозитория и применить их к открытому проекту. Перед применением всегда требуется подтверждение пользователя.',
+    input_schema: {
+      type: 'object',
+      properties: { force: { type: 'boolean', description: 'Применить версию GitHub даже при конфликте, потеряв локальные версии конфликтующих файлов. Используй только по явной просьбе пользователя.' } },
+      required: [],
+    },
+  },
+  {
+    name: 'create_repository_branch',
+    description: 'Создать новую ветку от текущей ветки и переключить открытый проект на неё. Перед созданием всегда требуется подтверждение пользователя.',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'Имя новой ветки, например feature/login-form.' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'push_repository',
+    description: 'Сделать commit и push локальных изменений открытого проекта в текущую ветку GitHub. Может дополнительно создать Pull Request. Перед push всегда требуется подтверждение пользователя.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Сообщение коммита.' },
+        create_pull_request: { type: 'boolean', description: 'Создать Pull Request после успешного push.' },
+        base_branch: { type: 'string', description: 'Целевая ветка Pull Request, например main.' },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'create_pull_request',
+    description: 'Создать Pull Request из текущей ветки в указанную базовую ветку. Перед созданием всегда требуется подтверждение пользователя.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Заголовок Pull Request.' },
+        body: { type: 'string', description: 'Описание Pull Request.' },
+        base_branch: { type: 'string', description: 'Целевая ветка, например main.' },
+      },
+      required: ['title', 'base_branch'],
     },
   },
   {

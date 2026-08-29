@@ -3,7 +3,7 @@ import { loadSettings, saveSettings, loadChats, saveChats, uid } from './lib/sto
 import * as fs from './lib/fs'
 import {
   cloneRepo, pushToGitHub as ghPush, createPullRequest, parseRepoInput,
-  fetchAccount, listUserRepos, listBranches, listCommits, listCommitChecks, createBranch as ghCreateBranch,
+  fetchAccount, listUserRepos, listBranches, listCommits, listCommitChecks, createBranch as ghCreateBranch, createRepository as ghCreateRepository, listIssues as ghListIssues, createIssue as ghCreateIssue,
 } from './lib/github'
 import { extractExternalFile } from './lib/fileExtract'
 import { clearProjectIndex } from './lib/projectIndex'
@@ -523,6 +523,58 @@ export function StoreProvider({ children }) {
     } catch (e) { toast('GitHub: ' + e.message); return false }
   }
 
+  const repositoryStatus = () => {
+    const proj = cur()
+    if (!proj?.github) throw new Error('откройте проект, связанный с GitHub-репозиторием')
+    return {
+      repository: `${proj.github.owner}/${proj.github.repo}`,
+      branch: proj.github.branch,
+      changes: changedFiles().map(({ path, status }) => ({ path, status })),
+    }
+  }
+
+  const createGitPullRequest = async ({ title, body, baseBranch }) => {
+    const proj = cur()
+    if (!proj?.github) throw new Error('проект не связан с GitHub-репозиторием')
+    const token = githubToken()
+    if (!token) throw new Error('подключите аккаунт GitHub в настройках')
+    const base = String(baseBranch || '').trim()
+    if (!base) throw new Error('укажите целевую ветку Pull Request')
+    if (base === proj.github.branch) throw new Error('целевая ветка должна отличаться от текущей')
+    const pr = await createPullRequest({
+      owner: proj.github.owner,
+      repo: proj.github.repo,
+      token,
+      head: proj.github.branch,
+      base,
+      title: String(title || '').trim() || 'PR from VerbaIDE',
+      body: String(body || '').trim() || 'Изменения из VerbaIDE (мобильная IDE).',
+    })
+    toast('PR создан #' + pr.number)
+    return { number: pr.number, url: pr.html_url || '' }
+  }
+
+  const createGitHubRepository = async ({ name, description, isPrivate }) => {
+    const token = githubToken(); if (!token) throw new Error('подключите аккаунт GitHub в настройках')
+    const remote = await ghCreateRepository({ token, name, description, isPrivate })
+    const proj = cur()
+    if (proj?.type === 'virtual') {
+      const next = { ...proj, github: { owner: remote.owner, repo: remote.repo, branch: remote.branch } }
+      setProject(next); await fs.persistVirtualProject(next.id, next.files, next.name, next.github, next.baseFiles)
+    }
+    toast('Репозиторий создан: ' + remote.owner + '/' + remote.repo)
+    return remote
+  }
+  const fetchGitIssues = async ({ state = 'open' } = {}) => {
+    const proj = cur(); if (!proj?.github) throw new Error('проект не связан с GitHub-репозиторием')
+    return ghListIssues({ token: githubToken(), owner: proj.github.owner, repo: proj.github.repo, state })
+  }
+  const createGitIssue = async ({ title, body }) => {
+    const proj = cur(); if (!proj?.github) throw new Error('проект не связан с GitHub-репозиторием')
+    const issue = await ghCreateIssue({ token: githubToken(), owner: proj.github.owner, repo: proj.github.repo, title, body })
+    toast('Issue создан #' + issue.number); return { number: issue.number, url: issue.html_url || '' }
+  }
+
   const deleteFile = async (path) => {
     const proj = cur()
     if (proj?.type === 'handle') {
@@ -601,8 +653,8 @@ export function StoreProvider({ children }) {
     toastMsg, toast,
     selectedProvider, selectModel,
     openFolder, grantPermission, openFolderVirtual, createTemplateProject, addFilesExternal, closeProject, refreshTree,
-    cloneFromGitHub, linkGitHub, changedFiles, pushToGitHub, pullFromGitHub, checkoutGitBranch, stashGitChanges, applyGitStash, fetchCommits, fetchCommitChecks, createGitBranch,
-    connectGitHub, disconnectGitHub, fetchMyRepos, fetchBranches, githubToken,
+    cloneFromGitHub, linkGitHub, changedFiles, pushToGitHub, pullFromGitHub, checkoutGitBranch, stashGitChanges, applyGitStash, fetchCommits, fetchCommitChecks, createGitBranch, repositoryStatus, createGitPullRequest,
+    connectGitHub, disconnectGitHub, fetchMyRepos, fetchBranches, githubToken, createGitHubRepository, fetchGitIssues, createGitIssue,
     tasks, addTask, patchTask, removeTask,
     switchProject, deleteProject,
     projectHasFile, readFile, writeFile, deleteFile, moveFile,
