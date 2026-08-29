@@ -36,6 +36,7 @@ Deno.serve(async (request) => {
       const flags = new Map((profiles || []).map((item) => [item.id, item.is_blocked]))
       return json({ users: data.users.map((item) => ({
         id: item.id, email: item.email, name: item.user_metadata?.full_name || item.user_metadata?.telegram_username || '',
+        username: item.user_metadata?.telegram_username || '',
         provider: item.user_metadata?.provider || item.app_metadata?.provider || 'email', createdAt: item.created_at,
         lastSignInAt: item.last_sign_in_at, isBlocked: flags.get(item.id) === true,
       })) })

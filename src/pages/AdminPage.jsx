@@ -54,18 +54,23 @@ export default function AdminPage() {
   if (state === 'error') return <div className="page admin-page"><section className="admin-locked"><IconShieldCheck width={28} height={28} /><h2>Доступ ограничен</h2><p>{error}</p><button className="mini-btn" onClick={load}>Повторить</button><small>Панель станет доступна после применения миграции и назначения роли admin.</small></section></div>
 
   const blocked = users.filter((user) => user.isBlocked).length
+  const signedIn = users.filter((user) => user.lastSignInAt).length
   return <div className="page admin-page">
     <section className="admin-hero">
-      <div><span className="eyebrow">VERBAIDE CONTROL</span><h1>Панель администратора</h1><p>Управляйте доступом к аккаунтам и следите за регистрациями.</p></div>
+      <div><span className="eyebrow">VERBAIDE CONTROL</span><h1>Панель администратора</h1><p>Аккаунты, доступ и активность пользователей.</p></div>
       <button className="mini-btn" onClick={load}>Обновить</button>
     </section>
-    <section className="admin-stats"><div><b>{users.length}</b><span>аккаунтов</span></div><div><b>{users.filter((user) => user.lastSignInAt).length}</b><span>входили в систему</span></div><div><b>{blocked}</b><span>ограничены</span></div></section>
+    <section className="admin-stats"><div><b>{users.length}</b><span>всего аккаунтов</span></div><div><b>{signedIn}</b><span>активных входов</span></div><div><b>{blocked}</b><span>ограничены</span></div></section>
     {error && <p className="admin-error">{error}</p>}
     <section className="admin-users"><div className="admin-users-title"><h2>Пользователи</h2><span>{users.length}</span></div>
-      {users.length === 0 ? <div className="empty-state">Аккаунтов пока нет.</div> : users.map((user) => <article className="admin-user" key={user.id}>
-        <div className="admin-avatar">{(user.name || user.email || '?').trim().slice(0, 1).toUpperCase()}</div>
-        <div className="admin-user-copy"><b>{user.name || 'Без имени'}</b><span>{user.email || user.id}</span><small>{user.provider || 'email'} · зарегистрирован {new Date(user.createdAt).toLocaleDateString('ru-RU')}</small></div>
-        <button className={'mini-btn ' + (user.isBlocked ? 'admin-allow' : 'admin-block')} disabled={updating === user.id} onClick={() => toggleBlock(user)}>{user.isBlocked ? 'Разблокировать' : 'Ограничить'}</button>
-      </article>)}</section>
+      {users.length === 0 ? <div className="empty-state">Аккаунтов пока нет.</div> : users.map((user) => {
+        const provider = user.provider === 'telegram' ? 'Telegram' : (user.provider || 'Email')
+        const handle = user.username ? '@' + user.username.replace(/^@/, '') : (user.provider === 'telegram' ? 'Telegram-аккаунт' : (user.email || user.id))
+        return <article className="admin-user" key={user.id}>
+          <div className="admin-avatar">{(user.name || user.username || user.email || '?').trim().slice(0, 1).toUpperCase()}</div>
+          <div className="admin-user-copy"><b>{user.name || user.username || 'Без имени'}</b><span>{handle}</span><small>{provider} · {new Date(user.createdAt).toLocaleDateString('ru-RU')}</small></div>
+          <button className={'mini-btn ' + (user.isBlocked ? 'admin-allow' : 'admin-block')} disabled={updating === user.id} onClick={() => toggleBlock(user)}>{user.isBlocked ? 'Разблокировать' : 'Ограничить доступ'}</button>
+        </article>
+      })}</section>
   </div>
 }
