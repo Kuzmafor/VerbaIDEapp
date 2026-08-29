@@ -1,6 +1,7 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { getProfile, Avatar } from '../lib/profile.jsx'
+import { supabase } from '../lib/supabase'
 import { IconClose, IconChat, IconFolder, IconGear, IconPlus, IconPuzzle, IconTrash, IconBrain, IconTasks, IconCamera } from './Icons'
 
 export default function Sidebar() {
@@ -8,6 +9,21 @@ export default function Sidebar() {
   const { chats, activeChatId, page, menuOpen, projects, project } = store
   const history = chats.filter((c) => c.messages.length > 0)
   const { uid } = getProfile()
+  const [account, setAccount] = useState(null)
+
+  useEffect(() => {
+    if (!supabase) return undefined
+    let active = true
+    supabase.auth.getUser().then(({ data }) => { if (active) setAccount(data.user || null) })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) setAccount(session?.user || null)
+    })
+    return () => { active = false; subscription.unsubscribe() }
+  }, [])
+
+  const meta = account?.user_metadata || {}
+  const telegramName = meta.telegram_username ? '@' + meta.telegram_username : (meta.full_name || account?.email || uid)
+  const accountKind = meta.provider === 'telegram' ? 'Вход через Telegram' : account ? 'Аккаунт VerbaIDE' : 'Локальный профиль'
 
   const go = (p) => {
     store.setPage(p)
@@ -116,10 +132,12 @@ export default function Sidebar() {
           }}
           title="Профиль и настройки"
         >
-          <Avatar size={32} />
+          {meta.avatar_url
+            ? <img className="side-profile-avatar" src={meta.avatar_url} alt="" referrerPolicy="no-referrer" />
+            : <Avatar size={32} />}
           <span className="side-uid-col">
-            <span className="side-uid">{uid}</span>
-            <span className="side-uid-sub">Локальный профиль</span>
+            <span className="side-uid">{telegramName}</span>
+            <span className="side-uid-sub">{accountKind}</span>
           </span>
           <IconGear width={15} height={15} className="side-uid-gear" />
         </div>
