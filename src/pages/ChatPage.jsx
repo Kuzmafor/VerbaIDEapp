@@ -12,12 +12,14 @@ import { inferProviderCapabilities, streamChat } from '../lib/llm'
 import { expandSlashCommand } from '../lib/commands'
 import { runProjectCommand } from '../lib/commandBridge'
 import { updateNativeAgent } from '../lib/backgroundAgent'
+import { toolCallToPending, editsSummary } from '../lib/aiEdits'
 import {
   IconCheck, IconChevronDown, IconCopy, IconFile, IconRefresh, IconStop, IconBrain, IconClose, IconArrowDown,
   IconSearch, IconEdit, IconCode, IconFolder, IconGear, IconDownload, IconBranch, ThinkingDots,
 } from '../components/Icons'
 import CodeEditor from '../components/CodeEditor'
 import ConfirmSheet from '../components/ConfirmSheet'
+import ReviewSheet from '../components/ReviewSheet'
 
 // Точные токены приходят от провайдера в usage; если он их не вернул, честно
 // помечаем цифру как приблизительную.
@@ -335,6 +337,9 @@ function WorkLog({ message, active, statusInfo }) {
     ? (Date.now() - started) / 1000
     : (message.stats?.seconds || ((message.workFinishedAt || started) - started) / 1000)
   const steps = message.toolSteps || []
+  // Во время работы новые действия важнее истории: активный шаг должен быть
+  // сразу под заголовком, а не теряться внизу длинного журнала.
+  const displaySteps = active ? [...steps].reverse() : steps
   const blocks = parseFileBlocks(message.content || '')
   const applied = new Set(message.appliedPaths || [])
   const changes = message.fileChanges || []
@@ -366,7 +371,15 @@ function WorkLog({ message, active, statusInfo }) {
               <span className="work-meta">несколько секунд</span>
             </div>
           )}
-          {steps.map((step, index) => {
+          {showLiveStatus && (
+            <div className="work-row running">
+              <span className="work-icon"><IconCode /></span>
+              <span className="work-label">{statusInfo.verb}</span>
+              {statusInfo.target && <span className="work-target">{statusInfo.target}</span>}
+              <span className="work-mini-loader" />
+            </div>
+          )}
+          {displaySteps.map((step, index) => {
             const info = stepInfo(step)
             const path = ['read_file', 'write_file', 'patch_file', 'delete_file'].includes(step.name) ? step.args?.path : ''
             const parts = path ? fileParts(path) : null
@@ -427,14 +440,6 @@ function WorkLog({ message, active, statusInfo }) {
               </div>
             )
           })}
-          {showLiveStatus && (
-            <div className="work-row running">
-              <span className="work-icon"><IconCode /></span>
-              <span className="work-label">{statusInfo.verb}</span>
-              {statusInfo.target && <span className="work-target">{statusInfo.target}</span>}
-              <span className="work-mini-loader" />
-            </div>
-          )}
         </div>
       )}
     </section>
@@ -511,6 +516,7 @@ export default function ChatPage() {
   const reasonRef = useRef(null)
   const stick = useRef(true)
   const [toolApproval, setToolApproval] = useState(null)
+  const [reviewOpen, setReviewOpen] = useState(false) // ReviewSheet для pending edits
 
   const draftKey = `verbaide.composer-draft.${activeChatId || 'new'}`
 
@@ -686,24 +692,23 @@ export default function ChatPage() {
           after = args.replace_all ? before.split(oldText).join(newText) : before.replace(oldText, newText)
         }
         if (after === before) return 'Файл уже содержит требуемый результат; запись не нужна'
-        if (!settings.confirmForMe) {
-          const allowed = await requestToolApproval({
-            kind: 'file',
-            title: exists ? 'Разрешить изменение файла?' : 'Разрешить создание файла?',
-            message: path,
-            detail: name === 'patch_file' ? 'Точечная замена фрагмента' : 'Полная запись содержимого',
-          }, context.signal)
-          if (!allowed) return 'Отказано пользователем: файл не изменён'
-        }
-        await store.writeFile(path, after)
-        await store.refreshTree()
+
+        // Безопасный процесс: сохраняем правку в pendingEdits, не применяем сразу.
+        // Стартуем AI-сессию, если ещё не начата. Пользователь увидит ReviewSheet
+        // с построчным diff'ом и сможет выбрать, что применять.
+        if (!store.aiSession) store.startAiSession()
+
+        const edit = toolCallToPending(name, args, before, after)
+        store.addPendingEdit(edit)
+        setReviewOpen(true)
+
+        // Записываем в сообщение preliminary file change для отображения в WorkLog
         const change = { path, ...lineDelta(before, after) }
         setChats((previous) => patchMsg(previous, context.chatId, context.assistantId, (message) => ({
           ...message,
-          appliedPaths: [...new Set([...(message.appliedPaths || []), path])],
           fileChanges: [...(message.fileChanges || []).filter((item) => item.path !== path), change],
         })))
-        return `Файл сохранён: ${path} (+${change.added} -${change.removed})`
+        return `Изменение подготовлено: ${path} (+${change.added} -${change.removed}). Проверьте и подтвердите в панели правок.`
       } catch (error) {
         return 'Ошибка: ' + (error?.message || String(error))
       }
@@ -1125,37 +1130,31 @@ export default function ChatPage() {
         setTimeout(() => runStream(chatId, history, assistantId, files, prov, summarySource, taskId, retryAttempt + 1), 900)
         return
       }
-      // «Подтверждать за меня»: сразу применяем файловые правки агента
+      // «Подтверждать за меня»: файловые блоки агента сохраняем как pending edits,
+      // затем автоматически запускаем проверку и открываем ReviewSheet.
+      // Раньше правки применялись сразу — теперь всё проходит через безопасный цикл.
       if (store.project && !store.project.needsPermission && settings.confirmForMe) {
         const blocks = parseFileBlocks(full)
-        const applied = []
-        const fileChanges = []
-        const failed = []
-        for (const b of blocks) {
-          try {
-            let before = ''
-            if (store.projectHasFile(b.path)) before = await store.readFile(b.path)
-            await store.writeFile(b.path, b.code)
-            applied.push(b.path)
-            fileChanges.push({ path: b.path, ...lineDelta(before, b.code) })
-          } catch (e) {
-            failed.push(b.path + ': ' + (e?.message || 'ошибка записи'))
+        if (blocks.length) {
+          if (!store.aiSession) store.startAiSession()
+          for (const b of blocks) {
+            try {
+              let before = ''
+              if (store.projectHasFile(b.path)) before = await store.readFile(b.path)
+              if (b.code === before) continue // уже актуален
+              const edit = toolCallToPending('write_file', { path: b.path, content: b.code }, before, b.code)
+              store.addPendingEdit(edit)
+            } catch { /* пропускаем блок, который не удалось прочитать */ }
+          }
+          // Автозапуск проверки после завершения ответа агента
+          if (store.aiSession?.pendingEdits?.length) {
+            setReviewOpen(true)
+            // Запускаем check/build в фоне, результат появится в ReviewSheet
+            store.runAiChecks().then((result) => {
+              if (!result.ok) store.toast('Проверка не пройдена — push заблокирован. Откройте панель правок.')
+            })
           }
         }
-        if (applied.length) {
-          store.refreshTree()
-          setChats((p) =>
-            patchMsg(p, chatId, assistantId, (m) => ({
-              ...m,
-              appliedPaths: [...(m.appliedPaths || []), ...applied],
-              fileChanges: [...(m.fileChanges || []), ...fileChanges],
-            }))
-          )
-        }
-        // Молча проглоченная ошибка записи была худшим вариантом: пользователь
-        // считал, что правки на диске, а их там не было.
-        if (failed.length) store.toast('Не удалось сохранить: ' + failed[0])
-        else if (applied.length) store.toast('Сохранено файлов: ' + applied.length)
       }
     }
   }
@@ -1549,6 +1548,57 @@ export default function ChatPage() {
       >
         {toolApproval?.detail && <pre className="confirm-command">{toolApproval.detail}</pre>}
       </ConfirmSheet>
+
+      {/* Плавающая кнопка открытия панели правок, если есть pending edits */}
+      {store.aiSession?.pendingEdits?.length > 0 && !reviewOpen && (
+        <button className="review-fab" onClick={() => setReviewOpen(true)}>
+          <IconEdit width={16} height={16} />
+          <span className="review-fab-count">{editsSummary(store.aiSession.pendingEdits).pending}</span>
+        </button>
+      )}
+
+      <ReviewSheet
+        open={reviewOpen}
+        edits={store.aiSession?.pendingEdits || []}
+        summary={editsSummary(store.aiSession?.pendingEdits || [])}
+        checkResult={store.aiSession?.checkResult}
+        onToggleEdit={(editId, selected) => store.updatePendingEdit(editId, { selected })}
+        onSelectAll={() => {
+          const edits = store.aiSession?.pendingEdits || []
+          edits.forEach((e) => { if (!e.applied && !e.rejected) store.updatePendingEdit(e.id, { selected: true }) })
+        }}
+        onDeselectAll={() => {
+          const edits = store.aiSession?.pendingEdits || []
+          edits.forEach((e) => { if (!e.applied && !e.rejected) store.updatePendingEdit(e.id, { selected: false }) })
+        }}
+        onApply={async () => {
+          const edits = store.aiSession?.pendingEdits || []
+          const selectedIds = edits.filter((e) => e.selected && !e.applied && !e.rejected).map((e) => e.id)
+          if (!selectedIds.length) return
+          const result = await store.applyPendingEdits(selectedIds)
+          if (result.failed.length) {
+            store.toast('Не удалось сохранить: ' + result.failed[0])
+          } else {
+            store.toast('Применено файлов: ' + result.applied.length)
+          }
+          // После применения — автозапуск проверки
+          await store.runAiChecks()
+          // Обновляем сообщения о применённых путях
+          const appliedPaths = result.applied
+          setChats((p) =>
+            patchMsg(p, chat?.id, messages[lastIdx]?.id, (m) => ({
+              ...m,
+              appliedPaths: [...new Set([...(m.appliedPaths || []), ...appliedPaths])],
+            }))
+          )
+        }}
+        onRevertSession={async () => {
+          const ok = await store.revertAiSession()
+          if (ok) setReviewOpen(false)
+        }}
+        onRunCheck={() => store.runAiChecks()}
+        onClose={() => setReviewOpen(false)}
+      />
 
       <Composer
         value={input}

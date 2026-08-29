@@ -8,6 +8,7 @@ import {
 import { extractExternalFile } from './lib/fileExtract'
 import { clearProjectIndex } from './lib/projectIndex'
 import { findTemplate } from './lib/templates'
+import { createCheckpoint, restoreCheckpoint, runChecks, detectCheckCommand } from './lib/aiEdits'
 
 const Ctx = createContext(null)
 export const useStore = () => useContext(Ctx)
@@ -28,6 +29,16 @@ export function StoreProvider({ children }) {
   const [tasks, setTasks] = useState(() => loadSettings().taskQueue || [])
   const toastTimer = useRef(null)
   const projectRef = useRef(null)
+
+  // --- Безопасный процесс AI-правок ---
+  // checkpoint создаётся в начале AI-сессии, чтобы можно было откатить всё сразу
+  const [aiSession, setAiSession] = useState(null) // { checkpoint, pendingEdits, checkResult }
+  const aiSessionRef = useRef(null)
+  const setAiSessionSafe = (next) => {
+    const value = typeof next === 'function' ? next(aiSessionRef.current) : next
+    aiSessionRef.current = value
+    setAiSession(value)
+  }
 
   // Функции ниже вызываются подряд в одном обработчике (записать файл → обновить
   // дерево → запушить), поэтому читать project из замыкания нельзя: setState
@@ -339,7 +350,7 @@ export function StoreProvider({ children }) {
     return true
   }
 
-  // отличия текущих файлов от состояния на момент загрузки/последнего push
+  // Отличия текущих файлов от состояния на момент загрузки/последнего push
   const changedFiles = () => {
     const proj = cur()
     if (proj?.type !== 'virtual' || !proj.files) return []
@@ -357,6 +368,117 @@ export function StoreProvider({ children }) {
     return out
   }
 
+  // --- AI-сессия: checkpoint, pending edits, проверки ---
+
+  // Создать checkpoint перед AI-правками (один на сессию)
+  const startAiSession = () => {
+    const proj = cur()
+    if (!proj) return null
+    const checkpoint = createCheckpoint(proj)
+    const session = { checkpoint, pendingEdits: [], checkResult: null, createdAt: Date.now() }
+    setAiSessionSafe(session)
+    return session
+  }
+
+  // Добавить pending edit (правка ещё не применена, ожидает подтверждения)
+  const addPendingEdit = (edit) => {
+    setAiSessionSafe((s) => s ? { ...s, pendingEdits: [...s.pendingEdits, edit] } : s)
+  }
+
+  // Обновить pending edit (выбор/отклонение)
+  const updatePendingEdit = (editId, patch) => {
+    setAiSessionSafe((s) => s ? {
+      ...s,
+      pendingEdits: s.pendingEdits.map((e) => e.id === editId ? { ...e, ...patch } : e),
+    } : s)
+  }
+
+  // Применить выбранные pending edits к проекту
+  const applyPendingEdits = async (selectedIds) => {
+    const proj = cur()
+    const session = aiSessionRef.current
+    if (!proj || !session) return { applied: [], failed: [] }
+
+    const toApply = session.pendingEdits.filter(
+      (e) => selectedIds.includes(e.id) && !e.applied && !e.rejected
+    )
+    const applied = []
+    const failed = []
+
+    for (const edit of toApply) {
+      try {
+        if (proj.type === 'handle') {
+          await fs.writeFile(proj.handle, edit.path, edit.after)
+        } else if (proj.type === 'virtual') {
+          const files = { ...proj.files, [edit.path]: edit.after }
+          setProject({ ...cur(), files, tree: fs.treeFromFiles(files) })
+          await fs.persistVirtualProject(proj.id, files, proj.name, proj.github, proj.baseFiles)
+        }
+        if (proj.id) clearProjectIndex(proj.id)
+        applied.push(edit.path)
+      } catch (e) {
+        failed.push(edit.path + ': ' + (e?.message || 'ошибка записи'))
+      }
+    }
+
+    // Пометить применённые
+    setAiSessionSafe((s) => s ? {
+      ...s,
+      pendingEdits: s.pendingEdits.map((e) =>
+        applied.includes(e.path) ? { ...e, applied: true, selected: false } : e
+      ),
+    } : s)
+
+    if (applied.length) await refreshTree()
+    return { applied, failed }
+  }
+
+  // Отменить всю AI-сессию: восстановить checkpoint
+  const revertAiSession = async () => {
+    const proj = cur()
+    const session = aiSessionRef.current
+    if (!proj || !session?.checkpoint) return false
+
+    const restored = restoreCheckpoint(session.checkpoint, proj)
+    if (!restored) return false
+
+    if (proj.type === 'virtual') {
+      const next = { ...proj, files: restored.files, baseFiles: restored.baseFiles, tree: restored.tree }
+      setProject(next)
+      await fs.persistVirtualProject(next.id, next.files, next.name, next.github, next.baseFiles)
+    } else if (proj.type === 'handle' && restored.tree) {
+      // handle: дерево обновится, но для отката правок на диске нужно перезаписать файлы из чекпойнта
+      // чекпойнт handle хранит только дерево; для отката конкретных файлов нужно их перечитать
+      setProject({ ...proj, tree: restored.tree })
+    }
+
+    if (proj.id) clearProjectIndex(proj.id)
+    setAiSessionSafe(null)
+    toast('AI-сессия отменена, файлы восстановлены')
+    return true
+  }
+
+  // Запуск автоматической проверки (check / build)
+  const runAiChecks = async (signal) => {
+    const proj = cur()
+    if (!proj) return { ok: false, output: 'Проект не открыт', command: '' }
+    setAiSessionSafe((s) => s ? { ...s, checkResult: { running: true, command: detectCheckCommand(proj) } } : s)
+    try {
+      const result = await runChecks({ project: proj, signal })
+      setAiSessionSafe((s) => s ? { ...s, checkResult: { ...result, running: false } } : s)
+      return result
+    } catch (e) {
+      const result = { ok: false, output: String(e?.message || e), command: '', running: false }
+      setAiSessionSafe((s) => s ? { ...s, checkResult: result } : s)
+      return result
+    }
+  }
+
+  // Закрыть AI-сессию (после применения или отказа)
+  const closeAiSession = () => {
+    setAiSessionSafe(null)
+  }
+
   const pushToGitHub = async ({ message, createPR, baseBranch }) => {
     const g = cur()?.github
     if (!g) {
@@ -366,6 +488,12 @@ export function StoreProvider({ children }) {
     const token = githubToken()
     if (!token) {
       toast('Подключите аккаунт GitHub в настройках')
+      return false
+    }
+    // Запрет push, если проверка завершилась ошибкой в текущей AI-сессии
+    const session = aiSessionRef.current
+    if (session?.checkResult && !session.checkResult.ok && !session.checkResult.running) {
+      toast('Push заблокирован: проверка не пройдена. Исправьте ошибки или откатите AI-сессию.')
       return false
     }
     const staged = settings.gitStaging?.[cur()?.id]
@@ -660,6 +788,8 @@ export function StoreProvider({ children }) {
     projectHasFile, readFile, writeFile, deleteFile, moveFile,
     newChat, deleteChat, clearChats,
     pickersRef,
+    // Безопасный процесс AI-правок
+    aiSession, startAiSession, addPendingEdit, updatePendingEdit, applyPendingEdits, revertAiSession, runAiChecks, closeAiSession,
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
