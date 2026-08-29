@@ -13,6 +13,7 @@ import { expandSlashCommand } from '../lib/commands'
 import { runProjectCommand } from '../lib/commandBridge'
 import { updateNativeAgent } from '../lib/backgroundAgent'
 import { toolCallToPending, editsSummary } from '../lib/aiEdits'
+import { diffLines, diffStats } from '../lib/textDiff'
 import {
   IconCheck, IconChevronDown, IconCopy, IconFile, IconRefresh, IconStop, IconBrain, IconClose, IconArrowDown,
   IconSearch, IconEdit, IconCode, IconFolder, IconGear, IconDownload, IconBranch, ThinkingDots,
@@ -483,14 +484,11 @@ function safeToolPath(value) {
   return clean
 }
 
+// Считает по настоящему LCS: при правках в двух концах файла прежняя версия
+// (общий префикс и суффикс) показывала в логе «-500/+500» вместо двух строк.
 function lineDelta(before, after) {
-  const left = String(before || '').split(/\r?\n/)
-  const right = String(after || '').split(/\r?\n/)
-  let start = 0
-  while (start < left.length && start < right.length && left[start] === right[start]) start++
-  let end = 0
-  while (end < left.length - start && end < right.length - start && left[left.length - 1 - end] === right[right.length - 1 - end]) end++
-  return { added: Math.max(0, right.length - start - end), removed: Math.max(0, left.length - start - end) }
+  const stats = diffStats(diffLines(before, after))
+  return { added: stats.added, removed: stats.removed }
 }
 
 export default function ChatPage() {
@@ -694,11 +692,12 @@ export default function ChatPage() {
         if (after === before) return 'Файл уже содержит требуемый результат; запись не нужна'
 
         // Безопасный процесс: сохраняем правку в pendingEdits, не применяем сразу.
-        // Стартуем AI-сессию, если ещё не начата. Пользователь увидит ReviewSheet
-        // с построчным diff'ом и сможет выбрать, что применять.
-        if (!store.aiSession) store.startAiSession()
+        // Пользователь увидит ReviewSheet с построчным diff'ом и сможет выбрать,
+        // что применять. ensureAiSession проверяет наличие сессии по ref, иначе
+        // в async-цикле агента второй вызов затёр бы первый checkpoint.
+        store.ensureAiSession()
 
-        const edit = toolCallToPending(name, args, before, after)
+        const edit = toolCallToPending(name, args, before, after, exists)
         store.addPendingEdit(edit)
         setReviewOpen(true)
 
@@ -1136,23 +1135,26 @@ export default function ChatPage() {
       if (store.project && !store.project.needsPermission && settings.confirmForMe) {
         const blocks = parseFileBlocks(full)
         if (blocks.length) {
-          if (!store.aiSession) store.startAiSession()
+          store.ensureAiSession()
           for (const b of blocks) {
             try {
+              const existed = store.projectHasFile(b.path)
               let before = ''
-              if (store.projectHasFile(b.path)) before = await store.readFile(b.path)
+              if (existed) before = await store.readFile(b.path)
               if (b.code === before) continue // уже актуален
-              const edit = toolCallToPending('write_file', { path: b.path, content: b.code }, before, b.code)
+              const edit = toolCallToPending('write_file', { path: b.path, content: b.code }, before, b.code, existed)
               store.addPendingEdit(edit)
             } catch { /* пропускаем блок, который не удалось прочитать */ }
           }
-          // Автозапуск проверки после завершения ответа агента
-          if (store.aiSession?.pendingEdits?.length) {
+          // Автозапуск проверки после завершения ответа агента.
+          // Сессию берём заново: store.aiSession к этому моменту уже устарел.
+          const session = store.ensureAiSession()
+          if (session?.pendingEdits?.length) {
             setReviewOpen(true)
-            // Запускаем check/build в фоне, результат появится в ReviewSheet
-            store.runAiChecks().then((result) => {
-              if (!result.ok) store.toast('Проверка не пройдена — push заблокирован. Откройте панель правок.')
-            })
+            // Проверку здесь запускать нельзя: правки ещё не применены, и
+            // собрался бы код без них — зелёный результат означал бы «старый
+            // код собирается», а не «правки безопасны». Проверка запускается
+            // в onApply, сразу после применения (и вручную кнопкой «Проверить»).
           }
         }
       }
@@ -1562,6 +1564,7 @@ export default function ChatPage() {
         edits={store.aiSession?.pendingEdits || []}
         summary={editsSummary(store.aiSession?.pendingEdits || [])}
         checkResult={store.aiSession?.checkResult}
+        persisted={store.aiSession?.persisted}
         onToggleEdit={(editId, selected) => store.updatePendingEdit(editId, { selected })}
         onSelectAll={() => {
           const edits = store.aiSession?.pendingEdits || []

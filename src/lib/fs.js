@@ -69,6 +69,20 @@ export async function readFile(path) {
   return f.text()
 }
 
+// Чтение напрямую по handle, без опоры на кэш fileHandles. Кэш заполняется
+// только buildTree(), а при восстановлении проекта из IndexedDB дерево уже
+// готовое и readFile() бросил бы «файл не найден».
+export async function readFileFromRoot(rootHandle, path) {
+  const parts = String(path || '').split('/').filter(Boolean)
+  if (!parts.length) throw new Error('Путь к файлу не указан')
+  let dir = rootHandle
+  for (let i = 0; i < parts.length - 1; i++) dir = await dir.getDirectoryHandle(parts[i])
+  const fh = await dir.getFileHandle(parts[parts.length - 1])
+  const f = await fh.getFile()
+  if (f.size > MAX_FILE) throw new Error('Файл слишком большой (>400 KB)')
+  return f.text()
+}
+
 export async function writeFile(rootHandle, path, content) {
   const parts = path.split('/')
   let dir = rootHandle

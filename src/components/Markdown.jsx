@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import CodeEditor from './CodeEditor'
-import { IconCode, IconCopy } from './Icons'
+import { IconBulb, IconCode, IconCopy } from './Icons'
 import { splitFences } from '../lib/fences'
 
 // Мини-рендерер markdown: абзацы, **жирный**, `код` и блоки ```
@@ -22,21 +22,58 @@ function inline(text) {
   return nodes
 }
 
+// Модель часто оформляет ответ заголовками «## Шаг 1». Раньше решётки
+// попадали в текст как есть, поэтому разбираем их здесь.
+const HEADING = /^(#{1,6})\s+(.*)$/
+
+function Heading({ level, text }) {
+  return (
+    <div className={'md-head md-h' + level}>
+      {level === 2 && <IconBulb width={15} height={15} className="md-head-icon" />}
+      <span>{inline(text)}</span>
+    </div>
+  )
+}
+
 function Prose({ text }) {
   if (!text.trim()) return null
-  const paras = text.split(/\n{2,}/)
+  // Разбор построчный: заголовок может идти без пустой строки перед ним,
+  // поэтому делить текст только по \n{2,} недостаточно.
+  const blocks = []
+  let buffer = []
+  const flush = () => {
+    if (!buffer.length) return
+    blocks.push({ type: 'p', lines: buffer })
+    buffer = []
+  }
+  for (const raw of text.split('\n')) {
+    const match = HEADING.exec(raw.trim())
+    if (match) {
+      flush()
+      blocks.push({ type: 'h', level: match[1].length, text: match[2] })
+    } else if (!raw.trim()) {
+      flush()
+    } else {
+      buffer.push(raw)
+    }
+  }
+  flush()
   return (
     <>
-      {paras.map((p, i) => (
-        <p key={i}>
-          {p.split('\n').map((line, j, arr) => (
-            <React.Fragment key={j}>
-              {inline(line)}
-              {j < arr.length - 1 && <br />}
-            </React.Fragment>
-          ))}
-        </p>
-      ))}
+      {blocks.map((block, i) =>
+        block.type === 'h' ? (
+          <Heading key={i} level={block.level} text={block.text} />
+        ) : (
+          <p key={i}>
+            {block.lines.map((line, j, arr) => (
+              <React.Fragment key={j}>
+                {inline(line)}
+                {j < arr.length - 1 && <br />}
+              </React.Fragment>
+            ))}
+          </p>
+        )
+      )}
     </>
   )
 }

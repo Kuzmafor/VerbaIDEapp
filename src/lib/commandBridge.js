@@ -1,4 +1,4 @@
-export async function runProjectCommand({ command, projectName, signal }) {
+async function requestCommand({ command, projectName, signal }) {
   let response
   try {
     response = await fetch('/__verbaide/run-command', {
@@ -17,11 +17,30 @@ export async function runProjectCommand({ command, projectName, signal }) {
   }
   const data = await response.json()
   if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+  return data
+}
+
+// Структурный результат: код завершения процесса доступен вызывающему.
+// По нему, а не по тексту вывода, нужно решать, прошла проверка или нет —
+// иначе успех приходится угадывать по словам вроде error или done.
+export async function runProjectCommandDetailed({ command, projectName, signal }) {
+  const data = await requestCommand({ command, projectName, signal })
+  return {
+    command: data.command || command,
+    code: Number.isFinite(data.code) ? data.code : -1,
+    stdout: data.stdout || '',
+    stderr: data.stderr || '',
+  }
+}
+
+// Текстовая форма — для показа человеку и для возврата модели в run_command.
+export async function runProjectCommand({ command, projectName, signal }) {
+  const { command: label, code, stdout, stderr } = await runProjectCommandDetailed({ command, projectName, signal })
   const chunks = [
-    `$ ${data.command}`,
-    data.stdout?.trim(),
-    data.stderr?.trim(),
-    `Код завершения: ${data.code}`,
+    `$ ${label}`,
+    stdout.trim(),
+    stderr.trim(),
+    `Код завершения: ${code}`,
   ].filter(Boolean)
   return chunks.join('\n')
 }

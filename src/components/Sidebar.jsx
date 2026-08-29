@@ -47,7 +47,10 @@ export default function Sidebar() {
       <div className={'backdrop' + (menuOpen ? ' show' : '')} onClick={() => store.setMenuOpen(false)} />
       <aside className={'sidebar' + (menuOpen ? ' open' : '')}>
         <div className="side-head">
-          <span className="side-logo">VerbaIDE</span>
+          <div className="side-brand">
+            <img className="side-logo-mark" src="/verbaide-logo.png" alt="" />
+            <span className="side-logo">VerbaIDE</span>
+          </div>
           <button className="iconbtn" onClick={() => store.setMenuOpen(false)} aria-label={t.close}>
             <IconClose />
           </button>

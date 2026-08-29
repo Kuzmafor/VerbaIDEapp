@@ -8,7 +8,8 @@ import {
 import { extractExternalFile } from './lib/fileExtract'
 import { clearProjectIndex } from './lib/projectIndex'
 import { findTemplate } from './lib/templates'
-import { createCheckpoint, restoreCheckpoint, runChecks, detectCheckCommand } from './lib/aiEdits'
+import { createCheckpoint, restoreCheckpoint, recordCheckpointFile, runChecks, detectCheckCommand } from './lib/aiEdits'
+import { saveCheckpoint, loadCheckpoint, clearCheckpoint } from './lib/checkpointStore'
 
 const Ctx = createContext(null)
 export const useStore = () => useContext(Ctx)
@@ -69,6 +70,20 @@ export function StoreProvider({ children }) {
     })()
   }, [])
 
+  // После перезагрузки checkpoint достаём из IndexedDB. Иначе кнопка
+  // «Отменить всю AI-сессию» выглядит рабочей, но откатывать ей нечего.
+  const hydrateAiSession = async (projectId) => {
+    try {
+      const saved = await loadCheckpoint(projectId)
+      if (!saved?.checkpoint || saved.checkpoint.projectId !== projectId) return
+      const pending = (saved.pendingEdits || []).filter((e) => e && e.id)
+      setAiSessionSafe({ ...saved, pendingEdits: pending, checkResult: null, restored: true, persisted: true })
+      if (pending.some((e) => !e.applied)) {
+        toast('AI-сессия восстановлена: правки ждут подтверждения, откат доступен')
+      }
+    } catch { /* без IndexedDB просто работаем без отката */ }
+  }
+
   const loadProjectById = async (id) => {
     const data = await fs.loadProjectById(id)
     if (!data) {
@@ -79,14 +94,17 @@ export function StoreProvider({ children }) {
       setProject({
         id, type: 'handle', name: data.meta.name, github: data.meta.github || null,
         handle: data.handle, tree: data.tree, needsPermission: !data.granted, writable: true,
+        scripts: await readPackageScripts({ type: 'handle', handle: data.handle }),
       })
     } else {
       setProject({
         id, type: 'virtual', name: data.meta.name, github: data.meta.github || null,
         tree: data.tree, files: data.files, baseFiles: data.base, writable: true,
+        scripts: await readPackageScripts({ type: 'virtual', files: data.files }),
       })
     }
     await fs.setActiveProjectId(id)
+    await hydrateAiSession(id)
     return true
   }
 
@@ -96,6 +114,9 @@ export function StoreProvider({ children }) {
       setPage('files')
       return
     }
+    // Сессия относится к конкретному проекту: уходим — закрываем её, чтобы
+    // checkpoint не переехал на другой проект и не пообещал чужой откат.
+    closeAiSession()
     const ok = await loadProjectById(id)
     if (ok) {
       toast('Проект: ' + (projects.find((p) => p.id === id)?.name || id))
@@ -105,6 +126,7 @@ export function StoreProvider({ children }) {
 
   const deleteProject = async (id) => {
     await fs.removeProjectData(id)
+    clearCheckpoint(id).catch(() => {})
     setProjects(await fs.listProjects())
     if (cur()?.id === id) setProject(null)
     toast('Проект удалён из списка')
@@ -166,10 +188,28 @@ export function StoreProvider({ children }) {
 
   // ---------- проект ----------
 
+  // Скрипты package.json определяют команду проверки. Читаем их сразу при
+  // открытии проекта: detectCheckCommand синхронный, а во время проверки
+  // читать файл уже поздно — агент мог его изменить, а доступ к папке отвалиться.
+  const readPackageScripts = async (proj) => {
+    try {
+      let raw = null
+      if (proj?.type === 'virtual') raw = proj.files?.['package.json']
+      else if (proj?.handle) raw = await fs.readFileFromRoot(proj.handle, 'package.json')
+      if (typeof raw !== 'string' || !raw) return {}
+      const parsed = JSON.parse(raw)
+      return parsed?.scripts && typeof parsed.scripts === 'object' ? parsed.scripts : {}
+    } catch {
+      // Нет package.json, нет доступа или это не JSON — проверять просто нечего
+      return {}
+    }
+  }
+
   const applyHandleProject = async (handle) => {
     const id = uid()
     const tree = await fs.buildTree(handle)
-    setProject({ id, type: 'handle', name: handle.name, github: null, handle, tree, writable: true })
+    const scripts = await readPackageScripts({ type: 'handle', handle })
+    setProject({ id, type: 'handle', name: handle.name, github: null, handle, tree, scripts, writable: true })
     await fs.persistHandleProject(id, handle, handle.name)
     setProjects(await fs.saveProjectRecord({ id, name: handle.name, type: 'handle' }))
     await fs.setActiveProjectId(id)
@@ -214,6 +254,7 @@ export function StoreProvider({ children }) {
     setProject({
       id, type: 'virtual', name, tree: fs.treeFromFiles(files), files,
       baseFiles: files, github: null, writable: true,
+      scripts: await readPackageScripts({ type: 'virtual', files }),
     })
     await fs.persistVirtualProject(id, files, name, null, files)
     setProjects(await fs.saveProjectRecord({ id, name, type: 'virtual' }))
@@ -375,14 +416,53 @@ export function StoreProvider({ children }) {
     const proj = cur()
     if (!proj) return null
     const checkpoint = createCheckpoint(proj)
-    const session = { checkpoint, pendingEdits: [], checkResult: null, createdAt: Date.now() }
+    const session = {
+      checkpoint, pendingEdits: [], checkResult: null, createdAt: Date.now(),
+      persisted: false, // станет true, если checkpoint удалось записать в IndexedDB
+    }
     setAiSessionSafe(session)
+    if (proj.id) {
+      saveCheckpoint(proj.id, session).then((saved) => {
+        setAiSessionSafe((s) =>
+          s && s.createdAt === session.createdAt && s.persisted !== saved ? { ...s, persisted: saved } : s
+        )
+      }).catch(() => {})
+    }
     return session
   }
 
-  // Добавить pending edit (правка ещё не применена, ожидает подтверждения)
+  // Сессию перезаписываем с задержкой: правки приходят по одной, а в IndexedDB
+  // дешевле сохранить итог пачки. persisted === false — сигнал для UI честно
+  // сказать, что откат живёт только до перезагрузки.
+  useEffect(() => {
+    const session = aiSession
+    const projectId = session?.checkpoint?.projectId
+    if (!session || !projectId) return undefined
+    const timer = setTimeout(() => {
+      saveCheckpoint(projectId, session).then((saved) => {
+        setAiSessionSafe((s) => (s && s.persisted !== saved ? { ...s, persisted: saved } : s))
+      }).catch(() => {})
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [aiSession])
+
+  // Проверка идёт по ref, а не по state: executeTool вызывается внутри
+  // async-цикла агента, где state из контекста успевает устареть. С проверкой
+  // по state две правки подряд создавали бы два checkpoint, и второй затирал
+  // накопленные снимки файлов — откат восстанавливал бы не всё.
+  const ensureAiSession = () => aiSessionRef.current || startAiSession()
+
+  // Добавить pending edit (правка ещё не применена, ожидает подтверждения).
+  // Для папки на диске попутно запоминаем исходное содержимое файла: именно
+  // здесь оно уже прочитано, а в момент отката читать будет нечего.
   const addPendingEdit = (edit) => {
-    setAiSessionSafe((s) => s ? { ...s, pendingEdits: [...s.pendingEdits, edit] } : s)
+    setAiSessionSafe((s) => {
+      if (!s) return s
+      if (s.checkpoint?.type === 'handle') {
+        recordCheckpointFile(s.checkpoint, edit.path, edit.before, edit.existed)
+      }
+      return { ...s, pendingEdits: [...s.pendingEdits, edit] }
+    })
   }
 
   // Обновить pending edit (выбор/отклонение)
@@ -429,7 +509,13 @@ export function StoreProvider({ children }) {
       ),
     } : s)
 
-    if (applied.length) await refreshTree()
+    if (applied.length) {
+      await refreshTree()
+      // Проверка запускалась до применения: файлы на диске были ещё старыми,
+      // и её зелёный результат относится к коду без этих правок. Сбрасываем,
+      // иначе push проходил бы по проверке, которой по сути не было.
+      setAiSessionSafe((s) => (s ? { ...s, checkResult: null } : s))
+    }
     return { applied, failed }
   }
 
@@ -446,14 +532,32 @@ export function StoreProvider({ children }) {
       const next = { ...proj, files: restored.files, baseFiles: restored.baseFiles, tree: restored.tree }
       setProject(next)
       await fs.persistVirtualProject(next.id, next.files, next.name, next.github, next.baseFiles)
-    } else if (proj.type === 'handle' && restored.tree) {
-      // handle: дерево обновится, но для отката правок на диске нужно перезаписать файлы из чекпойнта
-      // чекпойнт handle хранит только дерево; для отката конкретных файлов нужно их перечитать
-      setProject({ ...proj, tree: restored.tree })
+    } else if (proj.type === 'handle') {
+      // Откат на диск: переписываем каждый изменённый файл его исходным
+      // содержимым, а созданные агентом файлы (existed === false) удаляем.
+      // Без этого «Отменить сессию» меняла бы только дерево в памяти,
+      // оставляя правки в файлах на диске.
+      const snapshot = restored.files || {}
+      const failed = []
+      for (const [path, content] of Object.entries(snapshot)) {
+        try {
+          if (content === null) await fs.removeFile(proj.handle, path)
+          else await fs.writeFile(proj.handle, path, content)
+        } catch (e) {
+          failed.push(path)
+        }
+      }
+      const tree = await fs.buildTree(proj.handle)
+      setProject({ ...proj, tree })
+      if (failed.length) {
+        toast('Откат частичный, не удалось восстановить: ' + failed.slice(0, 2).join(', '))
+        return false
+      }
     }
 
     if (proj.id) clearProjectIndex(proj.id)
     setAiSessionSafe(null)
+    if (proj.id) clearCheckpoint(proj.id).catch(() => {})
     toast('AI-сессия отменена, файлы восстановлены')
     return true
   }
@@ -476,7 +580,11 @@ export function StoreProvider({ children }) {
 
   // Закрыть AI-сессию (после применения или отказа)
   const closeAiSession = () => {
+    const projectId = aiSessionRef.current?.checkpoint?.projectId
     setAiSessionSafe(null)
+    // Записанный checkpoint больше не нужен: держать его — значит обещать
+    // откат, которого после закрытия сессии уже нет.
+    if (projectId) clearCheckpoint(projectId).catch(() => {})
   }
 
   const pushToGitHub = async ({ message, createPR, baseBranch }) => {
@@ -490,11 +598,24 @@ export function StoreProvider({ children }) {
       toast('Подключите аккаунт GitHub в настройках')
       return false
     }
-    // Запрет push, если проверка завершилась ошибкой в текущей AI-сессии
+    // Запрет push, если применённые AI-правки не проверены.
+    //
+    // Считаем только применённые правки: пока они лежат в очереди, в файлах
+    // старый код и пушить нечего. А результат проверки должен быть получен
+    // уже после применения — до применения проверялся код без этих правок.
+    // Проверять нечем (в package.json нет check/build/test) — не блокируем:
+    // иначе push завис бы навсегда без объяснения причины.
     const session = aiSessionRef.current
-    if (session?.checkResult && !session.checkResult.ok && !session.checkResult.running) {
-      toast('Push заблокирован: проверка не пройдена. Исправьте ошибки или откатите AI-сессию.')
-      return false
+    const appliedEdits = (session?.pendingEdits || []).filter((e) => e.applied)
+    if (appliedEdits.length && detectCheckCommand(cur())) {
+      if (session.checkResult?.running) {
+        toast('Push заблокирован: проверка ещё идёт.')
+        return false
+      }
+      if (!session.checkResult?.ok) {
+        toast('Push заблокирован: правки применены, но не проверены. Запустите проверку или откатите AI-сессию.')
+        return false
+      }
     }
     const staged = settings.gitStaging?.[cur()?.id]
     const changes = changedFiles().filter((f) => !staged || staged[f.path])
@@ -534,11 +655,15 @@ export function StoreProvider({ children }) {
 
   const refreshTree = async () => {
     const proj = cur()
+    // Скрипты перечитываем вместе с деревом: агент мог добавить check или
+    // build в package.json, и команда проверки должна это заметить.
     if (proj?.type === 'handle' && proj.handle) {
       const tree = await fs.buildTree(proj.handle)
-      setProject({ ...cur(), tree })
+      const scripts = await readPackageScripts(proj)
+      setProject({ ...cur(), tree, scripts })
     } else if (proj?.type === 'virtual') {
-      setProject((p) => ({ ...p, tree: fs.treeFromFiles(p.files) }))
+      const scripts = await readPackageScripts(proj)
+      setProject((p) => ({ ...p, tree: fs.treeFromFiles(p.files), scripts }))
     }
   }
 
@@ -567,6 +692,15 @@ export function StoreProvider({ children }) {
       await fs.persistVirtualProject(proj.id, files, proj.name, proj.github, proj.baseFiles)
     } else {
       throw new Error('Проект не открыт — некуда сохранять')
+    }
+    // Ручная правка обнуляет результат проверки: после неё зелёный флаг
+    // относится уже к другому коду, и push по нему пропускать нельзя.
+    setAiSessionSafe((s) => (s?.checkResult ? { ...s, checkResult: null } : s))
+    // Правки из самой AI-сессии идут через applyPendingEdits и сюда не попадают,
+    // поэтому результат проверки они не сбрасывают.
+    if (path === 'package.json' || path.endsWith('/package.json')) {
+      const scripts = await readPackageScripts(cur())
+      setProject((p) => (p ? { ...p, scripts } : p))
     }
     if (proj?.id) clearProjectIndex(proj.id)
   }
@@ -789,7 +923,7 @@ export function StoreProvider({ children }) {
     newChat, deleteChat, clearChats,
     pickersRef,
     // Безопасный процесс AI-правок
-    aiSession, startAiSession, addPendingEdit, updatePendingEdit, applyPendingEdits, revertAiSession, runAiChecks, closeAiSession,
+    aiSession, startAiSession, ensureAiSession, addPendingEdit, updatePendingEdit, applyPendingEdits, revertAiSession, runAiChecks, closeAiSession,
   }
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

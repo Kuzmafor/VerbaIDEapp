@@ -3,6 +3,7 @@ import CodeEditor from './CodeEditor'
 import { useStore } from '../store'
 import { streamChat } from '../lib/llm'
 import { isBinaryPath } from '../lib/fs'
+import { diffLines } from '../lib/textDiff'
 import { mimeForPath, saveTextFile } from '../lib/deviceSave'
 import { IconCheck, IconClose, IconDownload, IconSparkles, IconUndo } from './Icons'
 
@@ -10,36 +11,6 @@ function stripFence(value) {
   let text = String(value || '').trim()
   text = text.replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '')
   return text
-}
-
-function lineDiff(before, after) {
-  const a = String(before).split('\n')
-  const b = String(after).split('\n')
-  if (a.length * b.length > 90000) {
-    return [
-      ...a.map((text, i) => ({ type: 'remove', text, oldLine: i + 1 })),
-      ...b.map((text, i) => ({ type: 'add', text, newLine: i + 1 })),
-    ]
-  }
-  const dp = Array.from({ length: a.length + 1 }, () => new Uint16Array(b.length + 1))
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
-    }
-  }
-  const rows = []
-  let i = 0
-  let j = 0
-  while (i < a.length || j < b.length) {
-    if (i < a.length && j < b.length && a[i] === b[j]) {
-      rows.push({ type: 'same', text: a[i], oldLine: i + 1, newLine: j + 1 }); i++; j++
-    } else if (j < b.length && (i === a.length || dp[i][j + 1] >= dp[i + 1][j])) {
-      rows.push({ type: 'add', text: b[j], newLine: j + 1 }); j++
-    } else {
-      rows.push({ type: 'remove', text: a[i], oldLine: i + 1 }); i++
-    }
-  }
-  return rows
 }
 
 export default function CanvasPanel({ open, onClose }) {
@@ -169,7 +140,7 @@ export default function CanvasPanel({ open, onClose }) {
     }
   }
 
-  const diff = useMemo(() => proposal == null ? [] : lineDiff(draft, proposal), [draft, proposal])
+  const diff = useMemo(() => proposal == null ? [] : diffLines(draft, proposal), [draft, proposal])
   if (!open) return null
 
   return (

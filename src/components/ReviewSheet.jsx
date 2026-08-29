@@ -4,31 +4,22 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { IconClose, IconCheck, IconChevronDown, IconRefresh, IconStop } from './Icons'
 
-// Построчный diff-вьювер: красит добавленные/удалённые/контекстные строки
-function DiffView({ diff, maxLines = 60 }) {
+// Построчный diff-вьювер: красит добавленные/удалённые/контекстные строки.
+// Показывает ханки с контекстом — если правок в файле несколько, между ними
+// ставится разрыв, а не вываливается весь файл подряд.
+function DiffView({ diff, maxLines = 80 }) {
   const lines = useMemo(() => {
-    const { beforeLines, afterLines, prefix, suffix, removed, added } = diff
     const out = []
-
-    // Контекст до (до 2 строк)
-    const ctxBefore = Math.min(2, prefix)
-    for (let i = prefix - ctxBefore; i < prefix; i++) {
-      if (i >= 0) out.push({ kind: 'context', text: beforeLines[i] })
-    }
-
-    // Удалённые
-    for (const line of removed) out.push({ kind: 'removed', text: line })
-
-    // Добавленные
-    for (const line of added) out.push({ kind: 'added', text: line })
-
-    // Контекст после (до 2 строк)
-    const ctxAfter = Math.min(2, suffix)
-    for (let i = 0; i < ctxAfter; i++) {
-      const idx = afterLines.length - suffix + i
-      if (idx >= 0 && idx < afterLines.length) out.push({ kind: 'context', text: afterLines[idx] })
-    }
-
+    const hunks = diff.hunks?.length ? diff.hunks : [{ rows: diff.rows || [] }]
+    hunks.forEach((hunk, index) => {
+      if (index > 0) out.push({ kind: 'gap' })
+      for (const row of hunk.rows) {
+        out.push({
+          kind: row.type === 'add' ? 'added' : row.type === 'remove' ? 'removed' : 'context',
+          text: row.text,
+        })
+      }
+    })
     return out
   }, [diff])
 
@@ -38,10 +29,14 @@ function DiffView({ diff, maxLines = 60 }) {
   return (
     <div className="diff-view">
       {shown.map((line, i) => (
-        <div key={i} className={'diff-line diff-' + line.kind}>
-          <span className="diff-marker">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}</span>
-          <code className="diff-text">{line.text || '\u00A0'}</code>
-        </div>
+        line.kind === 'gap' ? (
+          <div key={i} className="diff-gap">…</div>
+        ) : (
+          <div key={i} className={'diff-line diff-' + line.kind}>
+            <span className="diff-marker">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '}</span>
+            <code className="diff-text">{line.text || '\u00A0'}</code>
+          </div>
+        )
       ))}
       {truncated > 0 && (
         <div className="diff-truncated">… ещё {truncated} строк</div>
@@ -93,13 +88,21 @@ function EditCard({ edit, onToggle, onExpand }) {
 function CheckResult({ result }) {
   if (!result) return null
   const { ok, output, command, running } = result
+  // Команды нет, когда в package.json не нашлось ни check, ни build, ни test.
+  // Это не провал проверки, а её отсутствие — push при этом не блокируем.
+  const notConfigured = ok && !command
   return (
-    <div className={'review-check ' + (running ? 'running' : ok ? 'ok' : 'fail')}>
+    <div className={'review-check ' + (running ? 'running' : notConfigured ? 'none' : ok ? 'ok' : 'fail')}>
       <div className="review-check-head">
         {running ? (
           <>
             <ThinkingDots />
-            <span>Проверка: {command}</span>
+            <span>Проверка: {command || 'нет команды'}</span>
+          </>
+        ) : notConfigured ? (
+          <>
+            <span className="review-check-fail-icon">?</span>
+            <span>Проверять нечего</span>
           </>
         ) : ok ? (
           <>
@@ -115,8 +118,11 @@ function CheckResult({ result }) {
       </div>
       {!running && output && (
         <details className="review-check-output">
-          <summary>Вывод проверки</summary>
-          <pre>{output}</pre>
+          <summary>{notConfigured ? 'Подробнее' : 'Вывод проверки'}</summary>
+          <pre>{notConfigured
+            ? 'В package.json нет скриптов check, build или test. Добавьте хотя бы один — тогда правки будут проверяться автоматически. Сейчас push не заблокирован, но и проверки не будет.'
+            : output}
+          </pre>
         </details>
       )}
     </div>
@@ -136,6 +142,7 @@ export default function ReviewSheet({
   edits,
   summary,
   checkResult,
+  persisted,
   onToggleEdit,
   onSelectAll,
   onDeselectAll,
@@ -148,7 +155,10 @@ export default function ReviewSheet({
 
   const hasEdits = edits.length > 0
   const canApply = summary.selected > 0
-  const canPush = checkResult?.ok && !checkResult?.running
+  // «Заблокировано» имеет смысл только когда есть что применять. После
+  // применения результат проверки сбрасывается — это не блокировка, а
+  // приглашение запустить проверку заново, уже на применённом коде.
+  const canPush = canApply ? !!(checkResult?.ok && !checkResult?.running) : true
 
   return (
     <div className="review-backdrop" onClick={onClose} role="presentation">
@@ -221,6 +231,13 @@ export default function ReviewSheet({
             </>
           )}
         </div>
+
+        {/* Честно предупреждаем, если checkpoint не переживёт перезагрузку */}
+        {persisted === false && (
+          <div className="review-warning">
+            Checkpoint не удалось сохранить — откат сработает только до перезагрузки приложения.
+          </div>
+        )}
 
         {/* Отмена всей AI-сессии */}
         <button className="review-revert-btn" onClick={onRevertSession}>

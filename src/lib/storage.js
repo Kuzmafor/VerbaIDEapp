@@ -138,14 +138,22 @@ export function loadChats() {
   }
 }
 
+// content может отсутствовать — у черновика или у сообщения, собранного частично.
+// Без приведения к строке исключение вылетит внутри saveChats, и тогда не
+// сохранится вообще вся история, а не одно сообщение.
+function clipContent(content, limit = 200_000) {
+  const text = String(content ?? '')
+  return text.length > limit ? text.slice(0, limit) + '\n…' : text
+}
+
 export function saveChats(chats) {
   try {
     // ограничиваем размер сообщений, чтобы не переполнить localStorage
     const slim = chats.slice(0, 60).map((c) => ({
       ...c,
-      messages: c.messages.map((m) => ({
+      messages: (c.messages || []).map((m) => ({
         ...m,
-        content: m.content.length > 200_000 ? m.content.slice(0, 200_000) + '\n…' : m.content,
+        content: clipContent(m.content),
       })),
     }))
     localStorage.setItem(CHATS_KEY, JSON.stringify(slim))
@@ -156,10 +164,10 @@ export function saveChats(chats) {
       // текст и метаданные вложений, не теряя сами диалоги.
       const withoutImageData = chats.slice(0, 60).map((c) => ({
         ...c,
-        messages: c.messages.map((m) => ({
+        messages: (c.messages || []).map((m) => ({
           ...m,
           images: (m.images || []).map(({ dataUrl, ...meta }) => meta),
-          content: m.content.length > 200_000 ? m.content.slice(0, 200_000) + '\n…' : m.content,
+          content: clipContent(m.content),
         })),
       }))
       localStorage.setItem(CHATS_KEY, JSON.stringify(withoutImageData))

@@ -183,6 +183,15 @@ export const IconGitHub = (p) => (
   </svg>
 )
 
+// Лампочка — помечает заголовки второго уровня в ответе модели, чтобы «##»
+// не торчало в тексте служебными символами.
+export const IconBulb = (p) => (
+  <svg {...base} {...p}>
+    <path d="M12 3a6 6 0 0 0-3.5 10.9c.5.4.8 1 .9 1.6l.1.5h5l.1-.5c.1-.6.4-1.2.9-1.6A6 6 0 0 0 12 3z" />
+    <path d="M9.5 18h5M10.5 21h3" />
+  </svg>
+)
+
 // Анимация «агент думает»: три прыгающие точки
 export const ThinkingDots = () => (
   <span className="think-dots" aria-hidden="true">
